@@ -1,128 +1,74 @@
-好的，這是一個為您的「簡單黃金價格追蹤介面」Android 專案撰寫的繁體中文 README.md 範本。請您根據實際情況填寫方括號 `[ ]` 中的內容。
+好的，這是一個為您的 AI Agent 開發的 Android 黃金價格追蹤專案所編寫的繁體中文 README.md：
 
 ---
 
-# 簡單黃金價格追蹤器 Android 應用程式
+# 🤖✨ AI Agent 開發：黃金價格追蹤器
 
-[![Kotlin](https://img.shields.io/badge/Kotlin-✓-blue.svg)](https://kotlinlang.org/)
-[![Android Studio](https://img.shields.io/badge/Android_Studio-✓-green.svg)](https://developer.android.com/studio)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## 簡介
 
-## ✨ 專案簡介
+這是一個由先進 AI Agent 從零開始設計與開發的 Android 專案，旨在展示人工智慧在軟體工程領域的潛力。我們的 AI Agent 不僅能夠理解專案需求，還能自主地編寫程式碼、規劃架構並迭代優化。
 
-這是一個輕量級的 Android 應用程式，旨在提供使用者一個快速、簡潔的介面來追蹤即時黃金價格。它從公開的 API 獲取最新的黃金價格數據，並以直觀的方式呈現，讓您隨時掌握黃金市場的動態。
+目前，此專案的主要任務是建立一個**簡單、直觀的黃金價格追蹤介面**，讓使用者可以即時查看黃金市場的最新動態。
 
-**目標受眾:** 任何關心黃金價格、希望快速查詢即時數據的投資者或個人。
+## 目前任務與功能
 
-## 🚀 主要功能
+### 任務核心：簡單的黃金價格追蹤介面
 
-*   **即時黃金價格顯示:** 顯示當前黃金的市場價格（通常以美元/盎司為單位）。
-*   **手動刷新功能:** 提供一個按鈕，讓使用者可以手動刷新數據，確保資訊為最新。
-*   **簡潔直觀的介面:** 友善的使用者介面設計，讓您可以一目了然地看到最重要的資訊。
+我們的 AI Agent 正專注於實現以下核心功能：
 
-## 📱 應用程式截圖 (Screenshots)
+*   **即時價格顯示：** 獲取並顯示全球主要市場的即時黃金價格（例如：每盎司美元）。
+*   **簡潔使用者介面 (UI)：** 設計一個清晰、易於理解的介面，讓使用者一眼就能看到所需的資訊。
+*   **數據更新機制：** 具備定時刷新或手動刷新功能，以確保顯示的價格是最新的。
+*   **外部 API 整合：** 透過可靠的第三方 API 獲取黃金價格數據。
 
-| 首頁顯示 | 刷新中狀態 |
-| :------- | :-------- |
-| ![首頁截圖](screenshots/screenshot_home.png) | ![刷新中截圖](screenshots/screenshot_loading.png) |
-_請在此處替換為您的應用程式實際截圖。_
+## 技術棧
 
-## 🛠️ 使用技術
+此專案由 AI Agent 採用以下技術進行開發：
 
-*   **語言:** Kotlin
-*   **IDE:** Android Studio
-*   **網路請求:** Retrofit 2
-*   **JSON 解析:** GSON
-*   **異步處理:** Kotlin Coroutines
-*   **架構:** MVVM (或您專案中使用的任何架構模式)
-*   **UI:** XML Layouts
+*   **開發工具：** Android Studio
+*   **程式語言：** Kotlin
+*   **使用者介面：** XML (用於佈局設計)
+*   **資料獲取：** (預計將使用如 Retrofit 等 HTTP 客戶端庫來呼叫外部 API)
+*   **架構模式：** (AI Agent 將根據專案複雜度選擇合適的 Android 架構模式，例如 MVVM 或 MVI)
 
-## ⚙️ 環境設定與運行
+## 如何執行
 
-### 先決條件
-
-*   Android Studio (最新穩定版)
-*   Android SDK (API Level 21 或更高)
-*   Git
-
-### 步驟
-
-1.  **複製專案:**
+1.  **複製專案：**
     ```bash
-    git clone [您的 GitHub 專案 URL]
+    git clone [您的專案 Git 連結]
     cd [您的專案資料夾名稱]
     ```
+2.  **開啟專案：**
+    使用 Android Studio 開啟此專案。
+3.  **設定 API 金鑰：**
+    *   由於專案需要獲取外部黃金價格數據，您可能需要向特定的數據提供商申請 API 金鑰。
+    *   請根據專案中 `local.properties` 或其他配置檔案的指示，設定您的 API 金鑰。
+4.  **建置與執行：**
+    在 Android Studio 中點擊 "Run" 按鈕 (綠色箭頭)，將應用程式部署到模擬器或實體 Android 裝置上。
 
-2.  **在 Android Studio 中打開專案:**
-    *   啟動 Android Studio。
-    *   選擇 `File` > `Open`，然後導航到您剛才複製的專案資料夾並點擊 `OK`。
+## 截圖
 
-3.  **Gradle 同步:**
-    *   等待 Gradle 完成專案同步。如果遇到問題，請嘗試點擊 `File` > `Sync Project with Gradle Files`。
+（在此處插入應用程式介面截圖，展示黃金價格追蹤介面）
 
-4.  **API Key 設定:**
-    本應用程式需要一個黃金價格 API 來獲取數據。推薦使用例如 [APILayer Gold Price API](https://www.apilayer.com/gold_price_api) 或其他類似服務。
+## 未來展望
 
-    *   請到您選擇的 API 服務提供商註冊並獲取您的 API Key。
-    *   在您的專案根目錄下創建一個 `local.properties` 文件（如果它不存在）。
-    *   在 `local.properties` 中添加以下行，並替換為您的實際 API Key：
-        ```properties
-        API_KEY="YOUR_API_KEY_HERE"
-        ```
-    *   **重要提示:** API Key 通常是敏感資訊，不應直接提交到版本控制系統中。`local.properties` 預設已被 `.gitignore` 忽略，確保您的 API Key 不會被公開。
-    *   **(選擇性):** 您也可以在 `app/build.gradle` 中配置 `buildConfigField` 來從 `local.properties` 讀取鍵，使其在應用程式中可用：
-        ```gradle
-        android {
-            // ...
-            defaultConfig {
-                // ...
-                def API_KEY_PROP = properties.getProperty("API_KEY")
-                buildConfigField "String", "GOLD_API_KEY", "\"${API_KEY_PROP}\""
-            }
-        }
-        ```
-        然後在程式碼中透過 `BuildConfig.GOLD_API_KEY` 存取。
+此專案僅是 AI Agent 開發能力的初步展示。未來，我們的 AI Agent 將持續學習與迭代，不斷優化此應用程式的功能與效能，可能包括：
 
-5.  **運行應用程式:**
-    *   連接您的 Android 設備到電腦，或啟動一個模擬器。
-    *   點擊 Android Studio 工具列中的「Run」按鈕 (綠色三角形圖標) 來部署應用程式到您的設備或模擬器上。
+*   **歷史數據圖表：** 顯示黃金價格的歷史走勢圖。
+*   **價格波動提醒：** 設定價格警報，在黃金價格達到預設值時發出通知。
+*   **多種貨幣與單位支援：** 允許使用者選擇不同貨幣（如新台幣、人民幣）和計價單位（如公克、錢）。
+*   **個性化設定：** 提供更多使用者自定義選項。
+*   **更複雜的市場分析工具。**
 
-## 🌐 所使用的 API
+## 貢獻
 
-本應用程式透過 [API 名稱或連結，例如：APILayer Gold Price API]([API 連結，例如：https://www.apilayer.com/gold_price_api](https://www.apilayer.com/gold_price_api)) 獲取即時黃金價格數據。請確保您已正確配置 API Key。
+儘管此專案主要由 AI Agent 開發，但我們仍然歡迎任何形式的建議、問題回報或功能請求。您的回饋將幫助 AI Agent 更好地理解使用者需求，進而改進專案。
 
-## 💡 未來增強計畫 (Future Enhancements)
+*   **提交 Issue：** 如果您發現錯誤或有任何建議，請在 GitHub 上提交一個 Issue。
+*   **提出功能請求：** 如果您有新的功能想法，也歡迎提出。
 
-*   📈 添加歷史價格趨勢圖表。
-*   🔔 設置價格警報通知功能。
-*   🌍 支援多種貨幣和黃金單位轉換（例如：人民幣/克，台幣/錢）。
-*   🎨 實作深色模式（Dark Mode）支援。
-*   📱 開發桌面小工具（Widget），讓使用者無需打開應用程式即可查看價格。
-*   ⚙️ 更多設定選項，如刷新頻率等。
+## 許可證
 
-## 🤝 貢獻
-
-歡迎對此專案做出貢獻！如果您有任何建議、錯誤修復或新功能，請遵循以下步驟：
-
-1.  Fork 此儲存庫。
-2.  創建一個新的分支 (`git checkout -b feature/AmazingFeature`)。
-3.  提交您的更改 (`git commit -m 'Add some AmazingFeature'`)。
-4.  推送到分支 (`git push origin feature/AmazingFeature`)。
-5.  開一個 Pull Request。
-
-請確保您的程式碼遵循專案的風格指南，並包含適當的測試（如果適用）。
-
-## 📄 授權條款 (License)
-
-本專案採用 MIT 授權。詳情請參閱 `LICENSE` 文件。
-
-## 📧 聯繫作者
-
-如果您有任何問題或建議，請隨時通過以下方式聯繫我：
-
-*   **您的名字** - [您的 GitHub 個人資料]([您的 GitHub URL])
-*   **電子郵件:** [您的 Email 地址]
-
-專案連結: [https://github.com/[您的 GitHub 用戶名]/[您的專案名稱]]([您的 GitHub 專案 URL])
+（在此處說明專案的許可證，例如 MIT, Apache 2.0 等）
 
 ---

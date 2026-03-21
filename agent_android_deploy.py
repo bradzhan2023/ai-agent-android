@@ -17,6 +17,7 @@ APP_FILE = f"{SRC_PATH}/MainActivity.kt"
 MANIFEST_FILE = "app/src/main/AndroidManifest.xml"
 GRADLE_APP_FILE = "app/build.gradle"
 GRADLE_ROOT_FILE = "build.gradle"
+PROPERTIES_FILE = "gradle.properties" # 新增這個路徑
 SETTINGS_GRADLE = "settings.gradle"
 GITHUB_ACTION_FILE = ".github/workflows/android_build.yml"
 README_FILE = "README.md"
@@ -57,9 +58,17 @@ def initialize_android_project():
     os.makedirs(SRC_PATH, exist_ok=True)
     os.makedirs(".github/workflows", exist_ok=True)
     
+    # 1. 生成 settings.gradle
     if not os.path.exists(SETTINGS_GRADLE):
         with open(SETTINGS_GRADLE, "w") as f: f.write("include ':app'\n")
 
+    # 2. 生成 gradle.properties (修正這次報錯的核心！)
+    if not os.path.exists(PROPERTIES_FILE):
+        print(f"📁 生成 {PROPERTIES_FILE}...")
+        with open(PROPERTIES_FILE, "w") as f:
+            f.write("android.useAndroidX=true\nandroid.enableJetifier=true\n")
+
+    # 3. 生成根目錄 build.gradle
     if not os.path.exists(GRADLE_ROOT_FILE):
         with open(GRADLE_ROOT_FILE, "w") as f:
             f.write("""
@@ -73,6 +82,7 @@ buildscript {
 allprojects { repositories { google(); mavenCentral() } }
 """)
 
+    # 4. 生成 app/build.gradle
     if not os.path.exists(GRADLE_APP_FILE):
         with open(GRADLE_APP_FILE, "w") as f:
             f.write(f"""
@@ -103,6 +113,7 @@ dependencies {{
 }}
 """)
 
+    # 5. 生成 AndroidManifest.xml
     if not os.path.exists(MANIFEST_FILE):
         with open(MANIFEST_FILE, "w") as f:
             f.write(f"""<?xml version="1.0" encoding="utf-8"?>
@@ -117,6 +128,7 @@ dependencies {{
     </application>
 </manifest>""")
 
+    # 6. GitHub Action
     with open(GITHUB_ACTION_FILE, "w") as f:
         f.write("""
 name: Android Build APK
@@ -146,21 +158,18 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= 開發 Agent 邏輯 (強化 Prompt) =================
+# ... (後面的開發 Agent 邏輯與主程式保持不變) ...
 
 def developer_agent_android(task, model_id, api_ver):
     existing_code = ""
     if os.path.exists(APP_FILE):
         with open(APP_FILE, "r", encoding="utf-8") as f:
             existing_code = f.read()
-    
-    # 強化後的系統指令，確保 AI 不會漏掉必要的 imports
     system_instruction = (
         f"你是一個專精 Jetpack Compose 的 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
         "必須包含必要的 imports：androidx.compose.runtime.*, androidx.compose.material3.*, androidx.compose.foundation.layout.* 等。\n"
         "不要使用 Markdown 標籤，只輸出代碼。確保代碼可以直接編譯。"
     )
-
     prompt = f"{system_instruction}\n任務：{task}\n現有代碼：\n{existing_code}"
     code = call_gemini_api(prompt, model_id, api_ver)
     return code.replace("```kotlin", "").replace("```", "").strip()

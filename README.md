@@ -1,138 +1,128 @@
-# 📈 Simple Gold Price Tracker App for Android
-
-✨ 歡迎來到一個簡單而有效的 Android 應用程式，用於追蹤即時黃金價格！這個專案旨在提供一個清晰、易於閱讀的介面，讓使用者可以快速查看當前的黃金價格，並提供一個方便的刷新按鈕來獲取最新數據。
-
-## ✨ 功能特色
-
-*   **大字體顯示黃金價格**: 將當前黃金價格以大字體顯示在螢幕中央，例如 `300sp` 或更大，確保一眼就能看清。
-*   **刷新按鈕**: 一個位於介面底部的按鈕，點擊後會重新從 API 獲取最新的黃金價格。
-*   **載入指示器**: 在資料獲取期間顯示一個小的進度條，提升使用者體驗。
-*   **錯誤處理**: 當 API 呼叫失敗或無網路連接時，會顯示友善的錯誤訊息。
-*   **簡潔的 UI/UX**: 專注於核心功能，提供一個無雜亂的介面。
-
-## 📸 螢幕截圖 (概念圖)
-
-```
-+-------------------------------------+
-| 💰 金價追蹤器                     |
-|                                     |
-|                                     |
-|         $1,987.65                   |
-|         (Large Text)                |
-|                                     |
-|                                     |
-|         [ 🔄 刷新價格 ]             |
-|                                     |
-+-------------------------------------+
-```
-
-## 🛠️ 使用技術
-
-*   **語言**: Kotlin (或 Java)
-*   **架構**: Android Jetpack (Activity, ViewModel)
-*   **網路請求**: Retrofit + OkHttp
-*   **JSON 解析**: GSON (或 Moshi)
-*   **非同步處理**: Kotlin Coroutines
-*   **UI**: Material Design 元件 (TextView, Button, ProgressBar)
-
-## 🚀 設定與安裝
-
-1.  **複製專案**:
-    ```bash
-    git clone https://github.com/你的用戶名/SimpleGoldPriceTracker.git
-    cd SimpleGoldPriceTracker
-    ```
-
-2.  **開啟 Android Studio**:
-    在 Android Studio 中開啟這個專案。
-
-3.  **取得 API Key**:
-    這個應用程式需要一個外部 API 來獲取黃金價格。
-    我們建議使用像 `metals-api.com` 或 `goldapi.io` 這樣的服務。請註冊一個免費帳戶 (通常有請求限制)，並獲取你的 API Key。
-
-    > **推薦的 API (範例):** [metals-api.com](https://metals-api.com/)
-    >
-    > **API Endpoint 範例:**
-    > `https://api.metals-api.com/v1/latest?access_key=YOUR_API_KEY&base=USD&symbols=XAU`
-    > (這裡 `XAU` 是黃金的 ISO 貨幣代碼)
-
-4.  **配置 API Key**:
-    為了安全起見，請勿將 API Key 直接硬編碼在程式碼中。
-    在專案的根目錄下創建一個 `local.properties` 檔案（如果它不存在的話），並添加你的 API Key：
-
-    ```properties
-    API_KEY="你的實際API_Key"
-    ```
-
-    然後在 `app/build.gradle` (Module: app) 中，你可以像這樣讀取它：
-
-    ```gradle
-    android {
-        // ...
-        defaultConfig {
-            // ...
-            buildConfigField "String", "API_KEY", project.properties["API_KEY"] ?: "\"YOUR_DEFAULT_API_KEY_IF_NOT_SET\""
-        }
-        // ...
-    }
-    ```
-    現在你就可以在程式碼中透過 `BuildConfig.API_KEY` 來訪問它了。
-
-5.  **執行應用程式**:
-    連接你的 Android 設備或啟動模擬器，然後點擊 Android Studio 工具列上的 ▶️ Run 按鈕。
-
-## 💡 使用方式
-
-1.  啟動應用程式。
-2.  首次啟動時，應用程式會自動從 API 獲取並顯示當前黃金價格。
-3.  要更新價格，只需點擊螢幕底部的「刷新價格」按鈕。
-4.  如果在載入過程中出現錯誤，會顯示相應的錯誤訊息。
-
-## 📂 專案結構 (範例)
-
-```
-├── app
-│   ├── build.gradle
-│   └── src
-│       └── main
-│           ├── AndroidManifest.xml
-│           ├── java
-│           │   └── com
-│           │       └── example
-│           │           └── goldtracker
-│           │               ├── MainActivity.kt                # 主要活動，顯示UI和處理使用者互動
-│           │               ├── MainViewModel.kt               # 處理數據邏輯和狀態管理
-│           │               ├── api
-│           │               │   ├── GoldPriceResponse.kt       # API 回應的數據模型
-│           │               │   └── MetalsApiService.kt        # Retrofit 服務介面
-│           │               └── utils
-│           │                   └── Resource.kt                # 封裝數據狀態 (Success, Loading, Error)
-│           └── res
-│               ├── drawable
-│               ├── layout
-│               │   └── activity_main.xml                      # 主要介面佈局
-│               ├── mipmap
-│               └── values
-├── gradle
-│   └── wrapper
-├── build.gradle
-└── local.properties                 # 存放你的 API Key
-```
-
-## 🤝 貢獻
-
-歡迎任何形式的貢獻！如果你有改進的建議、發現了錯誤，或者想添加新功能，請隨時：
-
-1.  Fork 本專案
-2.  創建一個新的 Feature 分支 (`git checkout -b feature/AmazingFeature`)
-3.  提交你的更改 (`git commit -m 'Add some AmazingFeature'`)
-4.  推送到分支 (`git push origin feature/AmazingFeature`)
-5.  開一個 Pull Request
-
-## 📝 授權
-
-此專案根據 MIT 授權條款發布。詳情請參閱 [LICENSE](LICENSE) 檔案。
+這是一個為你的「簡易黃金價格追蹤介面」Android 專案設計的 `README.md` 範本。你可以根據你的實際實作細節進行調整。
 
 ---
 
-**感謝您使用或關注此專案！**
+# 📊 簡易黃金價格追蹤器 (Simple Gold Price Tracker)
+
+一個簡單的 Android 應用程式，用於顯示即時黃金價格。此專案旨在示範如何使用外部 API 獲取資料並在 Android 應用程式中呈現，同時採用現代 Android 開發的最佳實踐。
+
+## ✨ 專案簡介
+
+本應用程式提供一個簡潔的使用者介面，讓使用者可以快速查看當前的黃金價格。它透過呼叫一個外部的黃金價格 API 來獲取最新數據，並在應用程式中以易於理解的方式展示。這是一個入門級專案，適合學習 Android 網路請求、UI 更新和 MVVM (Model-View-ViewModel) 架構。
+
+## 🚀 主要功能
+
+*   **顯示即時黃金價格**：從選定的 API 獲取並顯示當前的黃金市場價格。
+*   **手動刷新**：提供一個按鈕，讓使用者可以手動刷新價格數據。
+*   **載入指示器**：在資料載入時顯示進度條，提升使用者體驗。
+*   **基本錯誤處理**：當 API 呼叫失敗或無網路連接時，提供友善的錯誤訊息。
+*   **簡潔使用者介面**：清晰直觀的介面設計，易於操作。
+*   **顯示上次更新時間**：告知使用者數據的時效性。
+
+## 📸 應用程式截圖
+
+請在此處插入您的應用程式截圖，以直觀展示其外觀和功能。
+
+![App Screenshot 1](https://via.placeholder.com/300x600?text=App+Screenshot+1)
+![App Screenshot 2](https://via.placeholder.com/300x600?text=App+Screenshot+2)
+*(請替換為您實際的截圖連結或圖片)*
+
+## 🛠️ 技術棧
+
+*   **程式語言**：Kotlin
+*   **Android SDK**：API 21+
+*   **架構模式**：MVVM (Model-View-ViewModel)
+*   **網路請求**：
+    *   [Retrofit](https://square.github.io/retrofit/)：類型安全的 HTTP 客戶端
+    *   [Gson](https://github.com/google/gson)：JSON 解析庫
+*   **非同步操作**：
+    *   [Kotlin Coroutines](https://kotlinlang.org/docs/reference/coroutines/index.html)：用於簡化非同步程式碼
+*   **Android Jetpack Components**：
+    *   [ViewModel](https://developer.android.com/topic/libraries/architecture/viewmodel)：管理 UI 相關資料，並在設定變更後保持資料不變
+    *   [LiveData](https://developer.android.com/topic/libraries/architecture/livedata)：可觀察的資料持有者，具有生命週期感知能力
+*   **UI/UX**：
+    *   Material Design Components
+
+## ⚙️ 環境設置與安裝
+
+1.  **複製專案**：
+    ```bash
+    git clone https://github.com/你的用戶名/你的專案名稱.git
+    ```
+2.  **開啟專案**：
+    在 Android Studio 中開啟複製的專案。
+
+3.  **取得 API Key**：
+    本專案需要一個黃金價格 API。你可以選擇使用：
+    *   [GoldAPI.io](https://goldapi.io/) (提供免費方案)
+    *   [APILayer (Currencylayer)](https://apilayer.com/marketplace/currencylayer-api)
+    *   或其他提供黃金價格的 API。
+
+    請註冊一個帳號並取得你的 API Key。
+
+4.  **配置 API Key**：
+    為了安全起見，請將 API Key 儲存在專案根目錄下的 `local.properties` 檔案中，而不是直接寫入程式碼。
+
+    *   在專案根目錄 (與 `settings.gradle.kts` 同級) 建立或編輯 `local.properties` 檔案，添加以下行：
+        ```properties
+        GOLD_API_KEY="你的_實際_API_KEY_放在這裡"
+        ```
+    *   在 `app/build.gradle.kts` (Module: app) 檔案中，將此 key 暴露給專案，以便在程式碼中存取：
+        在 `android { ... }` 區塊內添加：
+        ```kotlin
+        android {
+            // ...
+            defaultConfig {
+                // ...
+            }
+            // Add this block to read from local.properties
+            val goldApiKey: String = project.properties.get("GOLD_API_KEY") as String? ?: ""
+            buildTypes {
+                release {
+                    // ...
+                    buildConfigField("String", "GOLD_API_KEY", "\"$goldApiKey\"")
+                }
+                debug {
+                    // ...
+                    buildConfigField("String", "GOLD_API_KEY", "\"$goldApiKey\"")
+                }
+            }
+            // ...
+        }
+        ```
+        然後你可以在程式碼中透過 `BuildConfig.GOLD_API_KEY` 存取它。
+
+5.  **同步專案**：
+    在 Android Studio 中點擊 "Sync Project with Gradle Files" 按鈕。
+
+6.  **執行應用程式**：
+    在模擬器或實體裝置上運行應用程式。
+
+## 🖥️ 使用方法
+
+1.  啟動應用程式。
+2.  應用程式會自動嘗試從 API 獲取最新的黃金價格。
+3.  價格會顯示在主畫面上，以及上次更新的時間。
+4.  點擊 "刷新" 按鈕可以手動更新價格。
+5.  如果網路連線失敗或 API 錯誤，會顯示相應的錯誤訊息。
+
+## 🤝 貢獻
+
+歡迎任何形式的貢獻！如果你有任何建議、功能請求或發現 Bug，請透過以下方式：
+
+1.  **Fork** 本專案。
+2.  建立新的功能分支 (`git checkout -b feature/AmazingFeature`)。
+3.  進行你的更改。
+4.  提交你的更改 (`git commit -m 'Add some AmazingFeature'`)。
+5.  推送到分支 (`git push origin feature/AmazingFeature`)。
+6.  開啟一個 **Pull Request**。
+
+## 📜 授權許可
+
+本專案採用 MIT 授權條款 - 詳情請參見 [LICENSE](LICENSE) 檔案。
+
+## 🧑‍💻 作者
+
+*   **[你的名字/你的 GitHub ID]** - [你的 GitHub 個人資料連結](https://github.com/你的用戶名)
+
+---

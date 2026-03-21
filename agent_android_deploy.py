@@ -11,7 +11,6 @@ GITHUB_USER = "bradzhan2023"
 CURRENT_DIR = os.path.basename(os.getcwd())
 GITHUB_REPO = CURRENT_DIR 
 
-# Android 專案路徑結構
 PACKAGE_NAME = "com.example.aiagent"
 SRC_PATH = f"app/src/main/java/{PACKAGE_NAME.replace('.', '/')}"
 APP_FILE = f"{SRC_PATH}/MainActivity.kt"
@@ -32,7 +31,6 @@ GITHUB_REPO_URL = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_USER}/{GITHUB_REPO
 # ================= 核心 API 函數 =================
 
 def get_available_model():
-    """自動偵測可用的 Gemini Flash 模型版本"""
     for version in ["v1", "v1beta"]:
         url = f"https://generativelanguage.googleapis.com/{version}/models?key={GEMINI_API_KEY}"
         try:
@@ -43,10 +41,9 @@ def get_available_model():
                     if 'flash' in m['name'] and 'generateContent' in m.get('supportedGenerationMethods', []):
                         return m['name'], version
         except: continue
-    raise Exception("無法獲取 Gemini 模型，請檢查 API Key")
+    raise Exception("無法獲取 Gemini 模型")
 
 def call_gemini_api(prompt, model_id, api_ver):
-    """呼叫 Gemini API 進行生成"""
     url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
@@ -57,18 +54,13 @@ def call_gemini_api(prompt, model_id, api_ver):
 # ================= 專案初始化函數 =================
 
 def initialize_android_project():
-    """初始化完整的 Android 專案結構、Gradle 配置與 GitHub Actions"""
     os.makedirs(SRC_PATH, exist_ok=True)
     os.makedirs(".github/workflows", exist_ok=True)
     
-    # 1. 生成 settings.gradle
     if not os.path.exists(SETTINGS_GRADLE):
-        with open(SETTINGS_GRADLE, "w") as f:
-            f.write("include ':app'\n")
+        with open(SETTINGS_GRADLE, "w") as f: f.write("include ':app'\n")
 
-    # 2. 生成根目錄 build.gradle (定義 Plugin 版本)
     if not os.path.exists(GRADLE_ROOT_FILE):
-        print("📁 生成根目錄 build.gradle...")
         with open(GRADLE_ROOT_FILE, "w") as f:
             f.write("""
 buildscript {
@@ -78,19 +70,14 @@ buildscript {
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
     }
 }
-allprojects {
-    repositories { google(); mavenCentral() }
-}
+allprojects { repositories { google(); mavenCentral() } }
 """)
 
-    # 3. 生成 app/build.gradle (配置 Compose 環境)
     if not os.path.exists(GRADLE_APP_FILE):
-        print("📁 生成 app/build.gradle...")
         with open(GRADLE_APP_FILE, "w") as f:
             f.write(f"""
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
-
 android {{
     namespace '{PACKAGE_NAME}'
     compileSdk 34
@@ -101,23 +88,13 @@ android {{
         versionCode 1
         versionName "1.0"
     }}
-    buildFeatures {{
-        compose true
-    }}
-    composeOptions {{
-        kotlinCompilerExtensionVersion '1.5.8'
-    }}
-    compileOptions {{
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }}
-    kotlinOptions {{
-        jvmTarget = '17'
-    }}
+    buildFeatures {{ compose true }}
+    composeOptions {{ kotlinCompilerExtensionVersion '1.5.8' }}
+    compileOptions {{ sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }}
+    kotlinOptions {{ jvmTarget = '17' }}
 }}
 dependencies {{
     implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
     implementation 'androidx.activity:activity-compose:1.8.2'
     implementation platform('androidx.compose:compose-bom:2023.10.01')
     implementation 'androidx.compose.ui:ui'
@@ -126,13 +103,11 @@ dependencies {{
 }}
 """)
 
-    # 4. 生成 AndroidManifest.xml
     if not os.path.exists(MANIFEST_FILE):
-        print("📁 生成 AndroidManifest.xml...")
         with open(MANIFEST_FILE, "w") as f:
             f.write(f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:label="AI Agent App" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <application android:label="Gold Tracker" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -142,8 +117,6 @@ dependencies {{
     </application>
 </manifest>""")
 
-    # 5. 更新 GitHub Actions 流程檔 (強制指定 Gradle 8.5 並解決 Node 警告)
-    print("🤖 更新 GitHub Actions 流程檔...")
     with open(GITHUB_ACTION_FILE, "w") as f:
         f.write("""
 name: Android Build APK
@@ -173,7 +146,7 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= 開發 Agent 邏輯 =================
+# ================= 開發 Agent 邏輯 (強化 Prompt) =================
 
 def developer_agent_android(task, model_id, api_ver):
     existing_code = ""
@@ -181,51 +154,40 @@ def developer_agent_android(task, model_id, api_ver):
         with open(APP_FILE, "r", encoding="utf-8") as f:
             existing_code = f.read()
     
+    # 強化後的系統指令，確保 AI 不會漏掉必要的 imports
     system_instruction = (
-        f"你是一個 Android 開發專家。請撰寫 package 為 {PACKAGE_NAME} 的 MainActivity.kt。"
-        "使用 Jetpack Compose。必須包含所有必要的 import。只輸出代碼，不要 Markdown 標籤。"
+        f"你是一個專精 Jetpack Compose 的 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
+        "必須包含必要的 imports：androidx.compose.runtime.*, androidx.compose.material3.*, androidx.compose.foundation.layout.* 等。\n"
+        "不要使用 Markdown 標籤，只輸出代碼。確保代碼可以直接編譯。"
     )
 
-    if existing_code:
-        print(f"🔄 偵測到現有代碼，正在更新功能：{task}")
-        prompt = f"{system_instruction}\n目前的程式碼如下：\n{existing_code}\n\n請在保留原功能下新增功能：{task}。"
-    else:
-        print(f"🆕 正在建立新 Android 功能：{task}")
-        prompt = f"{system_instruction}\n請撰寫一個完整的 MainActivity.kt 來完成此任務：{task}。"
-    
+    prompt = f"{system_instruction}\n任務：{task}\n現有代碼：\n{existing_code}"
     code = call_gemini_api(prompt, model_id, api_ver)
     return code.replace("```kotlin", "").replace("```", "").strip()
 
 def github_release_agent(task_name, app_code, readme_content):
-    print(f"🚀 [Release Agent] 同步至 GitHub...")
-    with open(APP_FILE, "w", encoding="utf-8") as f: 
-        f.write(app_code)
-    with open(README_FILE, "w", encoding="utf-8") as f: 
-        f.write(readme_content)
-
+    print(f"🚀 同步至 GitHub...")
+    with open(APP_FILE, "w", encoding="utf-8") as f: f.write(app_code)
+    with open(README_FILE, "w", encoding="utf-8") as f: f.write(readme_content)
     try:
         repo = Repo(".")
         repo.git.add(A=True)
         repo.index.commit(f"Android AI Update: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main')
-        print(f"✅ 成功推送！請至 GitHub Actions 觀察編譯進度。")
+        print(f"✅ 推送成功！")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
-
-# ================= 主程式 =================
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("💡 使用方式: python3 agent_android_deploy.py \"任務描述\"")
         exit(1)
-        
     my_task = sys.argv[1]
     initialize_android_project()
-    
     try:
         model_id, api_ver = get_available_model()
         clean_code = developer_agent_android(my_task, model_id, api_ver)
-        doc_prompt = f"請為此 Android 專案寫一個繁體中文 README.md。任務是：{my_task}。"
+        doc_prompt = f"撰寫關於 {my_task} 的 Android 專案 README.md"
         readme_md = call_gemini_api(doc_prompt, model_id, api_ver)
         github_release_agent(my_task, clean_code, readme_md)
     except Exception as e:

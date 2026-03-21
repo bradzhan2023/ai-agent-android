@@ -1,101 +1,116 @@
-好的，這是一份為你的 AI Agent 自動開發的黃金追蹤 App 所撰寫的詳細繁體中文 `README.md`。
+# PAXG 金價追蹤器：即時 Binance API 整合與 OkHttp
 
----
+## 專案簡介
 
-# 【AI 生成專案】PAXG 黃金價格追蹤器 - 即時更新與手動刷新
+這是一個專為追蹤 PAX Gold (PAXG) 對 USDT 即時價格而設計的應用程式。它透過 OkHttp 請求 Binance API，每 30 秒自動更新一次價格，並以直觀、美觀的方式呈現：深藍色背景搭配醒目的金色大字顯示價格。此應用程式旨在提供一個簡單、高效且視覺友好的方式，讓使用者隨時掌握 PAXG 的最新市場動態。
 
-## 💡 專案簡介
+## 功能特色
 
-本專案是一個由 **AI Agent 自動開發**的 Android 應用程式，旨在提供 PAXG（一種黃金錨定代幣）對美金的即時價格追蹤。它利用幣安（Binance）API，確保您能隨時掌握黃金的市場動態，並支援自動與手動更新。這個專案不僅是一個功能性應用，更是一個展示 AI 在軟體開發領域潛力與效率的範例。
+*   **即時 PAXG/USDT 價格追蹤**：從 Binance 獲取最新的 PAXG 對 USDT 交易價格。
+*   **自動 UI 更新**：每 30 秒自動刷新一次價格數據並更新使用者介面，無需手動操作。
+*   **Binance API 整合**：直接連接 Binance 的公開 API，確保數據的準確性和即時性。
+*   **高效網路請求**：使用 OkHttp 作為 HTTP 客戶端，提供穩定且高效的網路通訊。
+*   **獨特使用者介面**：
+    *   **背景**：採用沉穩的深藍色，營造專業且舒適的視覺體驗。
+    *   **價格顯示**：價格數值以大字金色字體顯示，極具辨識度，一眼即可掌握。
 
-## ✨ 主要特色
+## 技術棧
 
-*   **網路連線權限**：已於 `AndroidManifest.xml` 中妥善配置 `INTERNET` 權限，確保應用程式能順利訪問外部網路以獲取價格數據。
-*   **高效非同步網路請求**：使用業界標準的 **OkHttp** 函式庫，以高效、非同步的方式從幣安 API 抓取最新的 PAXG/USDT 價格數據，確保應用程式介面的流暢性。
-*   **幣安 API 整合**：精確連結幣安的公開 API ( `https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT` )，獲取最即時且可靠的報價。
-*   **Compose 自動更新機制**：利用 Jetpack Compose 的 `LaunchedEffect` 機制，實現每分鐘自動刷新價格，確保數據的時效性，讓使用者無需手動操作。
-*   **直觀使用者介面 (UI)**：清晰顯示當前 PAXG 對美金（USDT）的價格。
-*   **手動重新整理**：提供一個方便的手動重新整理按鈕，讓使用者能隨時立即獲取最新數據，以應對快速變化的市場。
-*   **現代化技術棧**：整個專案基於 **Jetpack Compose** 開發，提供現代化、聲明式的 UI 開發體驗。
+*   **Kotlin (或 Java)**：應用程式主要開發語言。
+*   **OkHttp**：強大且高效的 HTTP 客戶端，用於 API 請求。
+*   **Binance API**：提供即時加密貨幣市場數據。
+*   **Android SDK**：構建 Android 應用程式的工具與函式庫 (假設為 Android 應用)。
 
-## 🚀 技術棧
+## API 端點
 
-*   **開發語言**：Kotlin
-*   **UI 框架**：Jetpack Compose
-*   **網路請求**：OkHttp
-*   **API 端點**：Binance API (PAXG/USDT)
-*   **開發工具**：Android Studio
+本專案使用以下 Binance API 端點來獲取 PAXG/USDT 的即時價格：
 
-## 📸 應用程式截圖 (Placeholder)
+```
+GET https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT
+```
 
-(此處可放置應用程式執行時的截圖，例如顯示價格和刷新按鈕的畫面)
+### 回應範例 (JSON):
 
-## 🛠️ 開發環境與建置
+```json
+{
+    "symbol": "PAXGUSDT",
+    "price": "2350.50000000"
+}
+```
 
-### 1. 先決條件
+應用程式會解析 `price` 欄位來顯示最新的 PAXG 價格。
 
-*   **Android Studio** (建議最新穩定版)
-*   **Android SDK** (API Level 21 或更高)
-*   **Kotlin Plugin** for Android Studio
+## 運行與安裝
 
-### 2. 環境建置步驟
+### 1. 克隆儲存庫
 
-1.  **克隆專案**：
-    ```bash
-    git clone [你的專案_Git_URL_在此]
-    cd [你的專案資料夾名稱]
-    ```
-2.  **開啟專案**：
-    使用 Android Studio 開啟克隆下來的專案資料夾。
-3.  **同步 Gradle**：
-    等待 Android Studio 自動同步 Gradle 專案。若有提示，請更新至建議的 Gradle 版本。
-4.  **運行應用程式**：
-    *   連接一部 Android 裝置或啟動模擬器。
-    *   在 Android Studio 工具列中選擇你的目標裝置。
-    *   點擊「Run」按鈕 (綠色箭頭圖示) 或按下 `Shift + F10` 來建置並運行應用程式。
+首先，將本專案克隆到您的本地機器：
 
-## 💡 使用說明
+```bash
+git clone [您的 GitHub 儲存庫 URL]
+cd [您的專案目錄名稱]
+```
 
-1.  **啟動應用程式**：
-    應用程式啟動後，將立即從 Binance API 抓取 PAXG 的最新價格並顯示。
-2.  **自動更新**：
-    應用程式會每隔 **1 分鐘**自動從 API 獲取最新的價格數據並更新顯示。
-3.  **手動重新整理**：
-    點擊螢幕上的「重新整理」按鈕，即可隨時觸發立即的價格更新。
+### 2. 開啟專案
 
-## 🤖 專案起源：AI Agent 自動生成
+使用 Android Studio (或其他相容 IDE) 開啟克隆下來的專案。
 
-本專案是一個極具里程碑意義的範例，它完全是透過 **AI Agent 的能力**，基於給定的需求描述，**自動進行分析、規劃、架構設計並撰寫所有程式碼**而生成。
+### 3. 同步 Gradle
 
-*   **從需求到實作**：AI Agent 理解了「在 AndroidManifest 加入 INTERNET 權限」、「使用 OkHttp 異步抓取 Binance API」、「使用 Compose 的 LaunchedEffect 每一分鐘自動更新」、「UI 顯示價格和手動重新整理按鈕」等所有細節。
-*   **自動化流程**：AI Agent 自主地識別所需的 Android 元件、Compose 可組合函數、網路請求的實現方式，並將它們整合到一個功能完整的應用程式中。
-*   **品質與效率**：這證明了 AI 在快速原型開發、甚至複雜應用程式開發中的巨大潛力，它能大幅提高開發效率，並保證程式碼的正確性和現代化。
+讓 IDE 同步所有依賴項。確保您的 `build.gradle` (Module: app) 中包含了 OkHttp 函式庫：
 
-這個專案不僅提供了一個實用的 PAXG 價格追蹤工具，更是一個展示未來軟體開發趨勢——由智慧型 AI 輔助甚至主導開發過程——的鮮活案例。
+```gradle
+dependencies {
+    // ... 其他依賴
+    implementation("com.squareup.okhttp3:okhttp:4.9.3") // 請使用最新穩定版本
+    // ...
+}
+```
 
-## 📈 未來增強計畫 (Potential Enhancements)
+同時，別忘了在 `AndroidManifest.xml` 中添加網路權限：
 
-*   **價格圖表**：加入歷史價格圖表，提供更全面的趨勢分析。
-*   **警報功能**：當價格達到特定閾值時發送通知。
-*   **多幣種追蹤**：支援追蹤除了 PAXG 之外的其他加密貨幣或代幣。
-*   **設定選項**：允許使用者自定義更新頻率、顯示的幣種等。
-*   **錯誤處理優化**：更完善的網路錯誤處理和使用者回饋機制。
-*   **本地數據快取**：當沒有網路時顯示上次成功獲取的數據。
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.paxgtracker">
 
-## 🤝 貢獻
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application
+        <!-- ... -->
+    </application>
+</manifest>
+```
 
-本專案是 AI Agent 的成果展示，但我們依然歡迎任何形式的貢獻，例如：
+### 4. 運行應用程式
 
-*   提出建議或改進意見。
-*   提交錯誤報告。
-*   優化程式碼或新增功能 (可基於 AI 生成的基礎上進行)。
+選擇一個模擬器或實體 Android 設備，然後點擊 Android Studio 工具列上的運行按鈕 (綠色三角形)。應用程式將會部署並啟動。
 
-請透過 GitHub Issues 或 Pull Requests 提交您的貢獻。
+## 使用方法
 
-## 📄 授權協議
+1.  啟動應用程式後，您將立即在螢幕中央看到 PAXG 對 USDT 的最新價格。
+2.  價格會每 30 秒自動更新一次，無需手動操作。
+3.  深藍色背景與大字金色價格的設計，讓您在任何時候都能輕鬆閱讀。
 
-本專案採用 MIT 授權協議。詳情請參閱 `LICENSE` 檔案。
+## 螢幕截圖
 
----
+(此處可以插入應用程式的截圖)
 
-希望這份詳細的 `README.md` 符合您的需求！
+*描述:* 想像一個深藍色的背景，中央以大約 48sp 的金色粗體字顯示當前價格，例如 "2350.50 USDT"。下方可能會有一個小字顯示上次更新時間。
+
+## 貢獻
+
+歡迎對此專案進行貢獻！如果您有任何建議、錯誤修復或新功能，請按照以下步驟操作：
+
+1.  Fork 本專案。
+2.  創建您的功能分支 (`git checkout -b feature/AmazingFeature`)。
+3.  提交您的更改 (`git commit -m 'Add some AmazingFeature'`)。
+4.  推送到分支 (`git push origin feature/AmazingFeature`)。
+5.  開一個 Pull Request。
+
+## 授權條款
+
+本專案採用 MIT 授權條款 - 詳細資訊請參閱 [LICENSE](LICENSE) 文件。
+
+## 作者
+
+[您的名字或 GitHub 用戶名]
+[您的聯絡方式，例如：您的網站、LinkedIn 或電子郵件]

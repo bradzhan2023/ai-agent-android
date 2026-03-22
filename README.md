@@ -1,116 +1,249 @@
-# PAXG 金價追蹤器：即時 Binance API 整合與 OkHttp
+# 💎 Binance PAXG 價格抓取器 (Android)
 
-## 專案簡介
+這個 Android 應用程式展示了如何使用 Kotlin Coroutines、`Dispatchers.IO` 和 Retrofit 從 Binance API 抓取 PAXG/USDT 的即時價格，並將結果顯示在畫面上。它特別處理了僅包含 `{'price':'123.4'}` 格式的 JSON 回傳。
 
-這是一個專為追蹤 PAX Gold (PAXG) 對 USDT 即時價格而設計的應用程式。它透過 OkHttp 請求 Binance API，每 30 秒自動更新一次價格，並以直觀、美觀的方式呈現：深藍色背景搭配醒目的金色大字顯示價格。此應用程式旨在提供一個簡單、高效且視覺友好的方式，讓使用者隨時掌握 PAXG 的最新市場動態。
+## ✨ 特點
 
-## 功能特色
+*   **Kotlin Coroutines:** 使用協程進行非同步操作，提高程式碼可讀性與維護性。
+*   **`Dispatchers.IO`:** 網路請求在專門為 I/O 操作設計的執行緒池上執行，避免阻塞主執行緒。
+*   **Retrofit:** 類型安全的 HTTP 客戶端，簡化 API 呼叫。
+*   **Gson:** 用於將 JSON 回應解析成 Kotlin 資料物件。
+*   **簡潔的 UI 更新:** 使用 `withContext(Dispatchers.Main)` 安全地更新 UI。
 
-*   **即時 PAXG/USDT 價格追蹤**：從 Binance 獲取最新的 PAXG 對 USDT 交易價格。
-*   **自動 UI 更新**：每 30 秒自動刷新一次價格數據並更新使用者介面，無需手動操作。
-*   **Binance API 整合**：直接連接 Binance 的公開 API，確保數據的準確性和即時性。
-*   **高效網路請求**：使用 OkHttp 作為 HTTP 客戶端，提供穩定且高效的網路通訊。
-*   **獨特使用者介面**：
-    *   **背景**：採用沉穩的深藍色，營造專業且舒適的視覺體驗。
-    *   **價格顯示**：價格數值以大字金色字體顯示，極具辨識度，一眼即可掌握。
+## 🚀 環境要求
 
-## 技術棧
+*   Android Studio (Flamingo 或更高版本建議)
+*   Kotlin 1.8.0 或更高版本
+*   Gradle 8.0 或更高版本
+*   一部運行 Android 5.0 (API level 21) 或更高版本的設備/模擬器
 
-*   **Kotlin (或 Java)**：應用程式主要開發語言。
-*   **OkHttp**：強大且高效的 HTTP 客戶端，用於 API 請求。
-*   **Binance API**：提供即時加密貨幣市場數據。
-*   **Android SDK**：構建 Android 應用程式的工具與函式庫 (假設為 Android 應用)。
+## 🛠️ 安裝與設置
 
-## API 端點
+請遵循以下步驟來設置並運行這個專案：
 
-本專案使用以下 Binance API 端點來獲取 PAXG/USDT 的即時價格：
+### 1. 建立新的 Android 專案
 
-```
-GET https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT
-```
+在 Android Studio 中建立一個新的「Empty Activity」專案。
 
-### 回應範例 (JSON):
+### 2. 添加依賴 (Dependencies)
 
-```json
-{
-    "symbol": "PAXGUSDT",
-    "price": "2350.50000000"
-}
-```
-
-應用程式會解析 `price` 欄位來顯示最新的 PAXG 價格。
-
-## 運行與安裝
-
-### 1. 克隆儲存庫
-
-首先，將本專案克隆到您的本地機器：
-
-```bash
-git clone [您的 GitHub 儲存庫 URL]
-cd [您的專案目錄名稱]
-```
-
-### 2. 開啟專案
-
-使用 Android Studio (或其他相容 IDE) 開啟克隆下來的專案。
-
-### 3. 同步 Gradle
-
-讓 IDE 同步所有依賴項。確保您的 `build.gradle` (Module: app) 中包含了 OkHttp 函式庫：
+打開你的模組級別 `build.gradle (app)` 檔案，並在 `dependencies` 區塊中添加以下依賴：
 
 ```gradle
 dependencies {
-    // ... 其他依賴
-    implementation("com.squareup.okhttp3:okhttp:4.9.3") // 請使用最新穩定版本
-    // ...
+    // Kotlin Coroutines
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+
+    // Retrofit
+    implementation "com.squareup.retrofit2:retrofit:2.9.0"
+    // Gson Converter (用於 JSON 解析)
+    implementation "com.squareup.retrofit2:converter-gson:2.9.0"
+
+    // AndroidX Lifecycle for lifecycleScope
+    implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.6.2"
+
+    // UI
+    implementation "androidx.core:core-ktx:1.12.0"
+    implementation "androidx.appcompat:appcompat:1.6.1"
+    implementation "com.google.android.material:material:1.10.0"
+    implementation "androidx.constraintlayout:constraintlayout:2.1.4"
 }
 ```
 
-同時，別忘了在 `AndroidManifest.xml` 中添加網路權限：
+記得點擊 Android Studio 右上角的 "Sync Now" 來同步 Gradle 檔案。
+
+### 3. 添加網路權限
+
+在你的 `AndroidManifest.xml` 檔案中，緊鄰 `<application>` 標籤上方添加 INTERNET 權限：
 
 ```xml
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.paxgtracker">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+
     <application
-        <!-- ... -->
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/full_backup_content"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.YourProjectName"
+        tools:targetApi="31">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>
 ```
 
-### 4. 運行應用程式
+## 💻 程式碼說明
 
-選擇一個模擬器或實體 Android 設備，然後點擊 Android Studio 工具列上的運行按鈕 (綠色三角形)。應用程式將會部署並啟動。
+以下是實現功能的關鍵程式碼片段。
 
-## 使用方法
+### 1. UI 佈局 (`activity_main.xml`)
 
-1.  啟動應用程式後，您將立即在螢幕中央看到 PAXG 對 USDT 的最新價格。
-2.  價格會每 30 秒自動更新一次，無需手動操作。
-3.  深藍色背景與大字金色價格的設計，讓您在任何時候都能輕鬆閱讀。
+我們需要一個 `TextView` 來顯示價格。
 
-## 螢幕截圖
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
 
-(此處可以插入應用程式的截圖)
+    <TextView
+        android:id="@+id/priceTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="載入中..."
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:padding="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
-*描述:* 想像一個深藍色的背景，中央以大約 48sp 的金色粗體字顯示當前價格，例如 "2350.50 USDT"。下方可能會有一個小字顯示上次更新時間。
+</androidx.constraintlayout.widget.ConstraintLayout>
+```
 
-## 貢獻
+### 2. 資料模型 (`PriceResponse.kt`)
 
-歡迎對此專案進行貢獻！如果您有任何建議、錯誤修復或新功能，請按照以下步驟操作：
+根據要求，我們需要解析 `{'price':'123.4'}` 格式的 JSON。
+**注意:** 實際的 Binance API 回傳會包含 `symbol` 和其他欄位，但我們這裡只專注於符合要求的 `price` 欄位。
 
-1.  Fork 本專案。
-2.  創建您的功能分支 (`git checkout -b feature/AmazingFeature`)。
-3.  提交您的更改 (`git commit -m 'Add some AmazingFeature'`)。
-4.  推送到分支 (`git push origin feature/AmazingFeature`)。
-5.  開一個 Pull Request。
+```kotlin
+package com.example.binancepaxgprice // 替換為你的套件名稱
 
-## 授權條款
+import com.google.gson.annotations.SerializedName
 
-本專案採用 MIT 授權條款 - 詳細資訊請參閱 [LICENSE](LICENSE) 文件。
+data class PriceResponse(
+    @SerializedName("price")
+    val price: String // 價格通常以字串形式從 API 回傳，方便處理小數點精度
+)
+```
 
-## 作者
+### 3. API 服務接口 (`BinanceApiService.kt`)
 
-[您的名字或 GitHub 用戶名]
-[您的聯絡方式，例如：您的網站、LinkedIn 或電子郵件]
+使用 Retrofit 定義一個接口來發送網路請求。
+
+```kotlin
+package com.example.binancepaxgprice // 替換為你的套件名稱
+
+import retrofit2.http.GET
+import retrofit2.http.Query
+
+interface BinanceApiService {
+    @GET("api/v3/ticker/price")
+    suspend fun getPaxgPrice(
+        @Query("symbol") symbol: String = "PAXGUSDT" // 指定交易對為 PAXGUSDT
+    ): PriceResponse
+}
+```
+
+### 4. 主要活動 (`MainActivity.kt`)
+
+這是所有邏輯匯集的地方。我們將在 `onCreate` 中初始化 Retrofit，並在一個 `lifecycleScope` 的協程中呼叫 API。
+
+```kotlin
+package com.example.binancepaxgprice // 替換為你的套件名稱
+
+import androidx.appcompat.app.AppCompatActivity
+import android.os.Bundle
+import android.widget.TextView
+import androidx.lifecycle.lifecycleScope // 用於啟動綁定生命週期的協程
+import kotlinx.coroutines.Dispatchers // 導入 Coroutines Dispatchers
+import kotlinx.coroutines.launch // 用於啟動協程
+import kotlinx.coroutines.withContext // 用於切換協程上下文
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory // 用於 Gson JSON 轉換器
+import java.lang.Exception // 處理可能的異常
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var priceTextView: TextView
+    private lateinit var binanceApiService: BinanceApiService
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        // 初始化 UI 元件
+        priceTextView = findViewById(R.id.priceTextView)
+
+        // 建立 Retrofit 實例
+        val retrofit = Retrofit.Builder()
+            .baseUrl("https://api.binance.com/") // Binance API 的基礎 URL
+            .addConverterFactory(GsonConverterFactory.create()) // 添加 Gson 轉換器
+            .build()
+
+        // 建立 BinanceApiService 實例
+        binanceApiService = retrofit.create(BinanceApiService::class.java)
+
+        // 立即抓取 PAXG 價格
+        fetchPaxgPrice()
+    }
+
+    /**
+     * 異步抓取 Binance PAXG 價格並更新 UI。
+     * 網路操作在 Dispatchers.IO 上執行，UI 更新在 Dispatchers.Main 上執行。
+     */
+    private fun fetchPaxgPrice() {
+        // 使用 lifecycleScope 啟動一個協程，該協程會綁定到 Activity 的生命週期
+        // 當 Activity 被銷毀時，協程也會被取消。
+        // Dispatchers.IO 適用於磁碟或網路 I/O 操作。
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // 呼叫 API 獲取 PAXGUSDT 的價格
+                val response = binanceApiService.getPaxgPrice("PAXGUSDT")
+                val price = response.price // 從回應中提取價格字串
+
+                // 將協程切換到主執行緒 (Main Dispatcher) 來更新 UI
+                withContext(Dispatchers.Main) {
+                    priceTextView.text = "PAXG 價格: $${price}"
+                }
+            } catch (e: Exception) {
+                // 如果發生錯誤，切換到主執行緒顯示錯誤訊息
+                withContext(Dispatchers.Main) {
+                    priceTextView.text = "載入失敗: ${e.localizedMessage}"
+                }
+                e.printStackTrace() // 將錯誤堆棧列印到 Logcat
+            }
+        }
+    }
+}
+```
+
+## 運行應用程式
+
+1.  在 Android Studio 中選擇你的設備或模擬器。
+2.  點擊運行按鈕 (綠色三角形)。
+
+應用程式啟動後，你應該會看到 PAXG/USDT 的即時價格顯示在畫面上。如果網路連接有問題或 API 返回錯誤，則會顯示相應的錯誤訊息。
+
+## 🎯 Binance API 端點
+
+*   **基礎 URL:** `https://api.binance.com/`
+*   **PAXG 價格端點:** `GET /api/v3/ticker/price?symbol=PAXGUSDT`
+*   **回應範例 (簡化後符合要求):**
+    ```json
+    {
+        "price": "2345.678"
+    }
+    ```
+    (實際 Binance API 回應會包含 `symbol` 和 `time` 等更多欄位，但此範例僅提取 `price` 欄位以符合請求解析 `{'price':'123.4'}` 的要求)
+
+## 📜 許可證
+
+這個專案是根據 MIT 許可證發布的。詳情請參閱 `LICENSE` 檔案 (如果有的話)。

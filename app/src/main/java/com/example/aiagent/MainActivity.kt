@@ -3,40 +3,41 @@ package com.example.aiagent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.lifecycle.lifecycleScope
+import com.example.aiagent.ui.theme.AiAgentTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.IOException
 import org.json.JSONObject
-
-// 自定義顏色
-val DeepBlue = Color(0xFF000080) // 深藍色
-val Gold = Color(0xFFFFD700) // 金色
+import java.io.IOException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                // 使用 Surface 作為應用程式的背景容器
+            AiAgentTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background // 使用主題的背景色，或直接移除
+                    color = MaterialTheme.colorScheme.background
                 ) {
-                    GoldPriceTrackerApp()
+                    BinancePriceScreen()
                 }
             }
         }
@@ -44,77 +45,95 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun GoldPriceTrackerApp() {
-    // 狀態變量用於儲存黃金價格和錯誤信息
-    val goldPrice = remember { mutableStateOf("正在抓取 PAXG 價格...") }
-    val errorMessage = remember { mutableStateOf<String?>(null) }
-    
-    // 創建一個 OkHttpClient 實例，並使用 remember 確保它在重組時保持不變
-    val okHttpClient = remember { OkHttpClient() }
-    val API_URL = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
+fun BinancePriceScreen() {
+    var price by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
 
-    // LaunchedEffect 用於在 CoroutineScope 中執行網路請求和定期更新
+    val lifecycleScope = rememberCoroutineScope() // Use rememberCoroutineScope for composable scope
+
+    // Trigger data fetch when the composable enters the composition
     LaunchedEffect(Unit) {
-        while (isActive) { // 保持循環直到 Composable 離開作用域
+        isLoading = true
+        error = null
+        price = null
+        lifecycleScope.launch {
             try {
-                // 構建網路請求
-                val request = Request.Builder()
-                    .url(API_URL)
-                    .build()
-
-                // 執行網路請求
-                val response = okHttpClient.newCall(request).execute()
-
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string()
-                    responseBody?.let {
-                        // 解析 JSON 響應
-                        val jsonObject = JSONObject(it)
-                        val price = jsonObject.getString("price")
-                        goldPrice.value = "PAXG: $price USDT"
-                        errorMessage.value = null // 清除任何先前的錯誤信息
-                    } ?: run {
-                        errorMessage.value = "接收到空響應體"
-                    }
-                } else {
-                    errorMessage.value = "錯誤: ${response.code} ${response.message}"
-                }
+                val fetchedPrice = fetchBinancePaxgPrice()
+                price = fetchedPrice
             } catch (e: IOException) {
-                // 處理網路相關錯誤 (例如，無網路連接)
-                errorMessage.value = "網路錯誤: ${e.localizedMessage}"
+                error = "網路錯誤: ${e.message}"
                 e.printStackTrace()
             } catch (e: Exception) {
-                // 處理其他意外錯誤 (例如，JSON 解析錯誤)
-                errorMessage.value = "發生意外錯誤: ${e.localizedMessage}"
+                error = "發生錯誤: ${e.message}"
                 e.printStackTrace()
+            } finally {
+                isLoading = false
             }
-            delay(30_000L) // 每 30 秒更新一次
         }
     }
 
-    // UI 佈局
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DeepBlue), // 應用深藍色背景
-        verticalArrangement = Arrangement.Center, // 垂直居中
-        horizontalAlignment = Alignment.CenterHorizontally // 水平居中
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = goldPrice.value,
-            color = Gold, // 價格文字使用金色
-            fontSize = 48.sp, // 大字顯示
-            fontWeight = FontWeight.Bold, // 粗體
-            modifier = Modifier.padding(16.dp)
-        )
-        // 如果有錯誤信息，則顯示
-        errorMessage.value?.let { message ->
-            Text(
-                text = "錯誤: $message",
-                color = Color.Red,
-                fontSize = 16.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+        if (isLoading) {
+            CircularProgressIndicator()
+            Text("正在加載...")
+        } else if (error != null) {
+            Text("錯誤: $error", color = MaterialTheme.colorScheme.error)
+        } else if (price != null) {
+            Text("PAXG/USDT 價格: $price", style = MaterialTheme.typography.headlineMedium)
+        } else {
+            Text("未獲取到價格資訊")
         }
+    }
+}
+
+suspend fun fetchBinancePaxgPrice(): String? {
+    return withContext(Dispatchers.IO) {
+        val client = OkHttpClient()
+        val request = Request.Builder()
+            .url("https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT")
+            .build()
+
+        try {
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string()
+                if (responseBody != null) {
+                    // Binance API returns {"symbol":"PAXGUSDT","price":"2350.20000000"}
+                    val jsonObject = JSONObject(responseBody)
+                    // The prompt asked for {'price':'123.4'} structure, assuming the actual Binance
+                    // response is handled to extract "price" field.
+                    return@withContext jsonObject.optString("price", "N/A")
+                }
+            }
+            throw IOException("請求失敗: ${response.code} ${response.message}")
+        } catch (e: Exception) {
+            throw IOException("網路請求錯誤或解析失敗", e)
+        }
+    }
+}
+
+// rememberCoroutineScope() import workaround for the provided structure.
+// This is typically managed by an Activity/ViewModel's lifecycleScope directly or using rememberCoroutineScope()
+// within a Composable. For pure Composable function examples, rememberCoroutineScope is appropriate.
+@Composable
+fun rememberCoroutineScope() = remember {
+    // This is a simplified way to get a CoroutineScope tied to the composable's lifecycle.
+    // In a real app, you might use an AndroidViewModel.viewModelScope or
+    // rememberCoroutineScope() provided by androidx.compose.runtime.
+    // For this specific example to meet the "import all" rule and avoid direct Activity lifecycle coupling in a Composable function,
+    // we'll explicitly use the runtime's rememberCoroutineScope.
+    androidx.compose.runtime.rememberCoroutineScope()
+}
+
+@Preview(showBackground = true)
+@Composable
+fun DefaultPreview() {
+    AiAgentTheme {
+        BinancePriceScreen()
     }
 }

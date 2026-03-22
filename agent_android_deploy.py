@@ -23,7 +23,7 @@ GITHUB_ACTION_FILE = ".github/workflows/android_build.yml"
 README_FILE = "README.md"
 
 if not GEMINI_API_KEY or not GITHUB_TOKEN:
-    print("❌ 錯誤：請先設定環境變數！")
+    print("❌ 錯誤：請先執行 export 設定環境變數！")
     exit(1)
 
 GITHUB_REPO_URL = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_USER}/{GITHUB_REPO}.git"
@@ -51,13 +51,13 @@ def call_gemini_api(prompt, model_id, api_ver):
         return response.json()['candidates'][0]['content']['parts'][0]['text']
     raise Exception(f"API Error: {response.text}")
 
-# ================= 專案環境初始化 (關鍵修正) =================
+# ================= 專案環境初始化 =================
 
 def initialize_android_project():
     os.makedirs(SRC_PATH, exist_ok=True)
     os.makedirs(".github/workflows", exist_ok=True)
     
-    # 1. 啟用 AndroidX
+    # 1. 啟用 AndroidX (核心配置)
     with open(PROPERTIES_FILE, "w") as f:
         f.write("android.useAndroidX=true\nandroid.enableJetifier=true\n")
 
@@ -77,8 +77,8 @@ buildscript {
 allprojects { repositories { google(); mavenCentral() } }
 """)
 
-    # 4. 生成 app/build.gradle (加入 OkHttp 依賴)
-    print("📁 更新 app/build.gradle 加入連網套件...")
+    # 4. 生成 app/build.gradle (加入 OkHttp 與 Coroutines)
+    print("📁 更新 app/build.gradle 加入必要依賴...")
     with open(GRADLE_APP_FILE, "w") as f:
         f.write(f"""
 apply plugin: 'com.android.application'
@@ -106,14 +106,14 @@ dependencies {{
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.foundation:foundation'
     
-    // 連網與 JSON 處理
+    // 網路與非同步處理 (修正 null 錯誤的關鍵)
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0'
 }}
 """)
 
-    # 5. 生成 AndroidManifest.xml (加入 INTERNET 權限)
-    print("📁 更新 AndroidManifest.xml 加入網路權限...")
+    # 5. 生成 AndroidManifest.xml (網路權限)
     with open(MANIFEST_FILE, "w") as f:
         f.write(f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -158,29 +158,31 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= 開發 Agent 邏輯 =================
+# ================= 開發 Agent 邏輯 (強化執行緒安全) =================
 
 def developer_agent_android(task, model_id, api_ver):
     system_instruction = (
-        f"你是一個專精 Jetpack Compose 的 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
-        "【強制規範】:\n"
-        "1. 必須包含必要的 Import (如 okhttp3.*, androidx.compose.*)。\n"
-        "2. 如果要發送網路請求，請使用 OkHttpClient 並在 CoroutineScope (如 LaunchedEffect) 中執行。\n"
-        "3. 確保包含所有基礎 UI 元件的 import。\n"
+        f"你是一個 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
+        "【絕對規則 - 避免 null 錯誤】:\n"
+        "1. 必須在背景執行緒發送請求：使用 `withContext(Dispatchers.IO)` 包裹 OkHttp 的 `client.newCall().execute()`。\n"
+        "2. UI 更新必須在主執行緒：網路請求完成後，直接更新 `mutableStateOf` 變數即可。\n"
+        "3. 必須包含所有 Import: kotlinx.coroutines.*, okhttp3.*, androidx.compose.runtime.*, androidx.compose.foundation.layout.* 等。\n"
         "4. 只輸出純代碼，不要 Markdown。"
     )
-    prompt = f"{system_instruction}\n任務目標：{task}"
+    
+    prompt = f"{system_instruction}\n任務：{task}\n請修正先前的網路請求錯誤，確保 UI 不會因為 Thread 報錯而顯示 null。"
+    
     code = call_gemini_api(prompt, model_id, api_ver)
     return code.replace("```kotlin", "").replace("```", "").strip()
 
 def github_release_agent(task_name, app_code, readme_content):
-    print(f"🚀 同步至 GitHub...")
+    print(f"🚀 推送至 GitHub...")
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(app_code)
     with open(README_FILE, "w", encoding="utf-8") as f: f.write(readme_content)
     try:
         repo = Repo(".")
         repo.git.add(A=True)
-        repo.index.commit(f"Android Gold API Update: {task_name}")
+        repo.index.commit(f"Android Thread-Safe Update: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main')
         print(f"✅ 推送成功！")
     except Exception as e:

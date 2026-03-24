@@ -1,6 +1,7 @@
 
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
+
 android {
     namespace 'com.example.aiagent'
     compileSdk 34
@@ -10,13 +11,22 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
-        multiDexEnabled true
+        multiDexEnabled true // 強制開啟 MultiDex，防止方法數溢出
     }
     buildFeatures { compose true }
     composeOptions { kotlinCompilerExtensionVersion '1.5.8' }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = '17' }
+    
+    // 解決封裝衝突 (解決 mergeExtDexDebug 錯誤的關鍵)
+    packagingOptions {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+            excludes += 'META-INF/versions/9/previous-compilation-data.bin'
+        }
+    }
 }
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.activity:activity-compose:1.8.2'
@@ -24,8 +34,13 @@ dependencies {
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.foundation:foundation'
+    
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    
+    // 繪圖庫
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+    
+    // MultiDex 支持庫
     implementation 'androidx.multidex:multidex:2.0.1'
 }

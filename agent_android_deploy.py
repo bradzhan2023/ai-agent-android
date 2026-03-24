@@ -56,7 +56,7 @@ def call_gemini_api(prompt, model_id, api_ver):
     except Exception as e:
         raise Exception(f"API 請求失敗: {str(e)}")
 
-# ================= 專案環境初始化 (整合 MultiDex 與 衝突排除) =================
+# ================= 專案環境初始化 =================
 
 def initialize_android_project():
     os.makedirs(SRC_PATH, exist_ok=True)
@@ -90,7 +90,6 @@ buildscript {
 }
 """)
 
-    # --- 重點更新區域：app/build.gradle ---
     with open(GRADLE_APP_FILE, "w") as f:
         f.write(f"""
 apply plugin: 'com.android.application'
@@ -105,14 +104,13 @@ android {{
         targetSdk 34
         versionCode 1
         versionName "1.0"
-        multiDexEnabled true // 強制開啟 MultiDex，防止方法數溢出
+        multiDexEnabled true 
     }}
     buildFeatures {{ compose true }}
     composeOptions {{ kotlinCompilerExtensionVersion '1.5.8' }}
     compileOptions {{ sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }}
     kotlinOptions {{ jvmTarget = '17' }}
     
-    // 解決封裝衝突 (解決 mergeExtDexDebug 錯誤的關鍵)
     packagingOptions {{
         resources {{
             excludes += '/META-INF/{{AL2.0,LGPL2.1}}'
@@ -128,14 +126,9 @@ dependencies {{
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.foundation:foundation'
-    
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-    
-    // 繪圖庫
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
-    
-    // MultiDex 支持庫
     implementation 'androidx.multidex:multidex:2.0.1'
 }}
 """)
@@ -183,17 +176,23 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= Agent 開發邏輯 =================
+# ================= Agent 開發邏輯 (強化版) =================
 
 def developer_agent_android(task, model_id, api_ver):
     system_instruction = (
         f"你是一個 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
+        "【嚴格禁令】:\n"
+        "1. 禁止引用 androidx.compose.ui.tooling.*，因為環境中沒有此依賴。\n"
+        "2. 禁止使用任何自定義主題 (如 AiAgentTheme)，請直接使用 androidx.compose.material3.MaterialTheme。\n"
+        "3. 禁止將 @Composable 呼叫放在非 Composable 的環境中。\n"
+        "【技術規範】:\n"
         "1. 使用 Jetpack Compose UI。\n"
         "2. 使用 MPAndroidChart 的 LineChart (透過 AndroidView 嵌入)。\n"
-        "3. 網路請求使用 Dispatchers.IO 並處理異常。\n"
-        "4. 直接輸出 Kotlin 程式碼，嚴禁包含 Markdown 標籤。"
+        "3. 網路請求使用 Dispatchers.IO，必須包含 try-catch 解析 JSON。\n"
+        "4. 確保所有 Import (如 androidx.compose.runtime.LaunchedEffect) 都被包含。\n"
+        "5. 直接輸出純程式碼，不可包含 Markdown 標籤。"
     )
-    return call_gemini_api(f"{system_instruction}\n任務目標：{task}", model_id, api_ver)
+    return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
 
 def github_release_agent(task_name, app_code, readme_content):
     print(f"🚀 同步至 GitHub...")
@@ -202,9 +201,9 @@ def github_release_agent(task_name, app_code, readme_content):
     try:
         repo = Repo(".")
         repo.git.add(A=True)
-        repo.index.commit(f"Android Linker Fix: {task_name}")
+        repo.index.commit(f"Fix unresolved reference: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main')
-        print(f"✅ 完成！請去 GitHub Actions 下載 APK。")
+        print(f"✅ 完成！請到 GitHub Actions 查看綠色勾勾。")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
 

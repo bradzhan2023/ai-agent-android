@@ -1,42 +1,41 @@
+package com.example.aiagent
+
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.material.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.aiagent.ui.theme.AiAgentTheme // 确保此主题文件存在
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
-import kotlinx.coroutines.*
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONArray
+import java.io.IOException
 import java.text.DecimalFormat
-import java.util.concurrent.TimeUnit
-import kotlin.math.abs
-
-package com.example.aiagent
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            AiAgentTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    color = MaterialTheme.colors.background
                 ) {
-                    GoldTrackerScreen()
+                    PriceChartScreen()
                 }
             }
         }
@@ -44,261 +43,140 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun GoldTrackerScreen() {
-    val scope = rememberCoroutineScope()
+fun PriceChartScreen() {
+    // 使用 mutableStateListOf 存储价格数据，以便Compose能够跟踪列表内容的变化
+    val prices = remember { mutableStateListOf<Float>() }
+    // 使用 mutableStateOf 存储涨跌幅文本
+    val priceChangeText = remember { mutableStateOf("加载中...") }
 
-    var openPrice by remember { mutableStateOf("N/A") }
-    var currentPrice by remember { mutableStateOf("N/A") }
-    var priceChange by remember { mutableStateOf("N/A") }
-    var percentageChange by remember { mutableStateOf("N/A") }
-    var chartEntries by remember { mutableStateOf<List<Entry>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf("") }
-    var changeColor by remember { mutableStateOf(Color.Gray) } // For price change text color
-
+    // LaunchedEffect 在 Composable 首次进入组合时执行一次，用于触发数据加载
     LaunchedEffect(Unit) {
-        scope.launch {
-            isLoading = true
-            errorMessage = ""
+        val client = OkHttpClient()
+        val request = Request.Builder()
+            .url("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24")
+            .build()
+
+        // 确保网络请求在 IO 调度器上执行
+        withContext(Dispatchers.IO) {
             try {
-                val data = fetchGoldPriceData()
-                openPrice = data.openPrice
-                currentPrice = data.currentPrice
-                priceChange = data.priceChange
-                percentageChange = data.percentageChange
-                chartEntries = data.chartEntries
-                changeColor = data.changeColor
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string()
+                    val gson = Gson()
+                    // 定义解析 Klines 数据的类型：一个包含字符串列表的列表
+                    val type = object : TypeToken<List<List<String>>>() {}.type
+                    val klines: List<List<String>> = gson.fromJson(responseBody, type)
+
+                    if (klines.isNotEmpty()) {
+                        // 提取每个 KLine 数据的收盘价 (索引4)
+                        val fetchedPrices = klines.map { it[4].toFloat() }
+                        prices.addAll(fetchedPrices)
+
+                        // 计算24小时涨跌幅：(最后收盘价 - 最初开盘价) / 最初开盘价 * 100%
+                        val firstOpenPrice = klines.first()[1].toFloat() // 开盘价在索引1
+                        val lastClosePrice = klines.last()[4].toFloat() // 收盘价在索引4
+                        val change = ((lastClosePrice - firstOpenPrice) / firstOpenPrice) * 100
+
+                        priceChangeText.value = "PAXGUSDT 24小时涨跌幅: ${DecimalFormat("0.00").format(change)}%"
+                    } else {
+                        priceChangeText.value = "没有数据。"
+                    }
+                } else {
+                    priceChangeText.value = "请求失败: ${response.code} ${response.message}"
+                }
+            } catch (e: IOException) {
+                priceChangeText.value = "网络错误: ${e.message}"
             } catch (e: Exception) {
-                errorMessage = "Error: ${e.message}"
-            } finally {
-                isLoading = false
+                priceChangeText.value = "发生未知错误: ${e.message}"
             }
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "今日黃金走勢 (PAXG/USDT)",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("PAXGUSDT 价格走势") })
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp)
+        ) {
+            // 显示计算出的涨跌幅文本
+            Text(
+                text = priceChangeText.value,
+                style = MaterialTheme.typography.h6,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
 
-        if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.size(48.dp))
-            Text("加載中...")
-        } else if (errorMessage.isNotEmpty()) {
-            Text(errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
-            Button(onClick = {
-                scope.launch {
-                    isLoading = true
-                    errorMessage = ""
-                    try {
-                        val data = fetchGoldPriceData()
-                        openPrice = data.openPrice
-                        currentPrice = data.currentPrice
-                        priceChange = data.priceChange
-                        percentageChange = data.percentageChange
-                        chartEntries = data.chartEntries
-                        changeColor = data.changeColor
-                    } catch (e: Exception) {
-                        errorMessage = "Error: ${e.message}"
-                    } finally {
-                        isLoading = false
-                    }
-                }
-            }, modifier = Modifier.padding(top = 8.dp)) {
-                Text("重試")
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(text = "當前價格: $currentPrice USDT", style = MaterialTheme.typography.titleLarge)
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        text = "今日漲跌價: $priceChange USDT",
-                        color = changeColor,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "($percentageChange%)",
-                        color = changeColor,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontSize = 18.sp
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
+            // 使用 AndroidView 嵌入 MPAndroidChart 的 LineChart
             AndroidView(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(300.dp)
-                    .background(Color.White),
+                    .height(300.dp), // 设置图表高度
                 factory = { context ->
                     LineChart(context).apply {
-                        description.isEnabled = false // Hide description label
-                        setTouchEnabled(true) // Enable touch gestures
-                        isDragEnabled = true // Enable dragging
-                        setScaleEnabled(true) // Enable scaling
-                        setPinchZoom(true) // Enable pinch zoom
-                        setDrawGridBackground(false) // No grid background
+                        // 图表基础配置
+                        description.isEnabled = false // 不显示描述文本
+                        setTouchEnabled(true) // 允许触摸交互
+                        isDragEnabled = true // 允许拖动
+                        setScaleEnabled(true) // 允许缩放
+                        setPinchZoom(true) // 允许捏合缩放
+                        setDrawGridBackground(false) // 不绘制网格背景
 
-                        xAxis.apply {
-                            position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
-                            setDrawGridLines(false) // No vertical grid lines
-                            setDrawAxisLine(true)
-                            valueFormatter = object : IndexAxisValueFormatter() {
-                                override fun getFormattedValue(value: Float): String {
-                                    // Labels for the last 24 hours, H-23 to H-0
-                                    val hour = (24 - 1 - value.toInt()).coerceAtLeast(0)
-                                    return if (value.toInt() in 0 until 24) "H-$hour" else ""
-                                }
-                            }
-                            labelCount = 5 // Show roughly 5 labels
-                            setAvoidFirstLastVisibleLabel(true)
-                            textColor = android.graphics.Color.BLACK
-                        }
+                        // X 轴配置
+                        xAxis.position = XAxis.XAxisPosition.BOTTOM // X 轴显示在底部
+                        xAxis.setDrawGridLines(false) // 不绘制 X 轴网格线
+                        xAxis.setDrawAxisLine(true) // 绘制 X 轴线
+                        xAxis.granularity = 1f // X 轴最小间隔为 1
+                        // 为 X 轴设置标签，从1到24小时
+                        xAxis.valueFormatter = IndexAxisValueFormatter(List(24) { (it + 1).toString() })
+                        xAxis.textColor = Color.BLACK
 
-                        axisLeft.apply {
-                            setDrawGridLines(true) // Horizontal grid lines
-                            setDrawAxisLine(true)
-                            textColor = android.graphics.Color.BLACK
-                        }
-                        axisRight.isEnabled = false // Disable right Y-axis
+                        // 左 Y 轴配置
+                        axisLeft.setDrawGridLines(true) // 绘制左 Y 轴网格线
+                        axisLeft.setDrawAxisLine(true) // 绘制左 Y 轴线
+                        axisLeft.textColor = Color.BLACK
 
-                        legend.isEnabled = false // Disable legend
-                        animateX(1500) // Animate chart creation
+                        // 右 Y 轴配置，禁用
+                        axisRight.isEnabled = false
+
+                        // 图例配置
+                        legend.isEnabled = true // 显示图例
+                        legend.textSize = 12f
+                        legend.textColor = Color.BLACK
                     }
                 },
-                update = { chart ->
-                    if (chartEntries.isNotEmpty()) {
-                        val dataSet = LineDataSet(chartEntries, "PAXG/USDT Price").apply {
-                            color = android.graphics.Color.BLUE
-                            valueTextColor = android.graphics.Color.BLACK
-                            lineWidth = 2f
-                            setDrawCircles(false) // No circles on data points
-                            setDrawValues(false) // No value text on points
-                            mode = LineDataSet.Mode.LINEAR // Straight line segments
-                            setDrawFilled(true)
-                            fillColor = android.graphics.Color.parseColor("#80ADD8E6") // Light blue fill with transparency
+                update = { lineChart ->
+                    // 当 prices 列表发生变化时，更新图表数据
+                    if (prices.isNotEmpty()) {
+                        // 将价格数据转换为 MPAndroidChart 的 Entry 对象
+                        val entries = prices.mapIndexed { index, price ->
+                            Entry(index.toFloat(), price)
                         }
 
+                        // 创建 LineDataSet
+                        val dataSet = LineDataSet(entries, "PAXGUSDT 价格 (USD)").apply {
+                            color = Color.BLUE // 设置线条颜色
+                            valueTextColor = Color.BLACK
+                            lineWidth = 2f // 线条宽度
+                            setDrawValues(false) // 不在图表上绘制具体数值
+                            setDrawCircles(false) // 不绘制数据点上的圆圈
+                            mode = LineDataSet.Mode.CUBIC_BEZIER // 曲线平滑模式
+                            setDrawFilled(true) // 绘制填充区域
+                            fillColor = Color.parseColor("#80ADD8E6") // 填充颜色（半透明浅蓝色）
+                        }
+
+                        // 将 LineDataSet 封装到 LineData 中
                         val lineData = LineData(dataSet)
-                        chart.data = lineData
-                        chart.invalidate() // Refresh chart
+                        // 设置图表数据
+                        lineChart.data = lineData
+                        lineChart.animateX(1500) // X轴动画
+                        lineChart.invalidate() // 刷新图表
                     }
                 }
             )
         }
-    }
-}
-
-data class GoldPriceData(
-    val openPrice: String,
-    val currentPrice: String,
-    val priceChange: String,
-    val percentageChange: String,
-    val chartEntries: List<Entry>,
-    val changeColor: Color
-)
-
-suspend fun fetchGoldPriceData(): GoldPriceData {
-    val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
-
-    val request = Request.Builder()
-        .url("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24")
-        .build()
-
-    return withContext(Dispatchers.IO) {
-        val response = client.newCall(request).execute()
-
-        if (!response.isSuccessful) {
-            throw Exception("Network request failed: ${response.code} - ${response.message}")
-        }
-
-        val responseBody = response.body?.string()
-            ?: throw Exception("Empty response body from Binance API")
-
-        val jsonArray = try {
-            JSONArray(responseBody)
-        } catch (e: Exception) {
-            throw Exception("Failed to parse JSON response: ${e.message}")
-        }
-
-        if (jsonArray.length() < 2) { // Need at least 2 data points for a meaningful change
-            throw Exception("Not enough data received for calculation. Received ${jsonArray.length()} entries.")
-        }
-
-        val priceFormat = DecimalFormat("#,##0.00")
-        val percentageFormat = DecimalFormat("0.00")
-
-        var calculatedOpenPrice = 0.0
-        var calculatedCurrentPrice = 0.0
-        val chartDataEntries = mutableListOf<Entry>()
-
-        for (i in 0 until jsonArray.length()) {
-            val kline = jsonArray.optJSONArray(i)
-            if (kline != null && kline.length() > 4) { // Ensure enough elements in kline array
-                val closePriceStr = kline.optString(4, "0.0") // Index 4 is close price
-                val closePrice = closePriceStr.toDoubleOrNull()
-                    ?: throw Exception("Invalid close price format at index $i: $closePriceStr")
-
-                if (i == 0) {
-                    val openPriceStr = kline.optString(1, "0.0") // Index 1 is open price
-                    calculatedOpenPrice = openPriceStr.toDoubleOrNull()
-                        ?: throw Exception("Invalid open price format at index $i: $openPriceStr")
-                }
-
-                if (i == jsonArray.length() - 1) {
-                    calculatedCurrentPrice = closePrice
-                }
-                chartDataEntries.add(Entry(i.toFloat(), closePrice.toFloat()))
-            } else {
-                // Log or handle malformed kline data, but don't stop processing if possible
-                System.err.println("Malformed kline data at index $i: $kline")
-            }
-        }
-
-        if (calculatedOpenPrice == 0.0 || calculatedCurrentPrice == 0.0) {
-            throw Exception("Could not extract valid open or current prices.")
-        }
-
-        val rawPriceChange = calculatedCurrentPrice - calculatedOpenPrice
-        val rawPercentageChange = (rawPriceChange / calculatedOpenPrice) * 100
-
-        val displayOpenPrice = priceFormat.format(calculatedOpenPrice)
-        val displayCurrentPrice = priceFormat.format(calculatedCurrentPrice)
-        val displayPriceChange = priceFormat.format(rawPriceChange)
-        val displayPercentageChange = percentageFormat.format(rawPercentageChange)
-
-        val changeColor = when {
-            rawPriceChange > 0 -> Color.Green
-            rawPriceChange < 0 -> Color.Red
-            else -> Color.Gray
-        }
-
-        GoldPriceData(
-            openPrice = displayOpenPrice,
-            currentPrice = displayCurrentPrice,
-            priceChange = displayPriceChange,
-            percentageChange = displayPercentageChange,
-            chartEntries = chartDataEntries,
-            changeColor = changeColor
-        )
     }
 }

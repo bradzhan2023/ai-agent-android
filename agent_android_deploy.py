@@ -23,12 +23,12 @@ GITHUB_ACTION_FILE = ".github/workflows/android_build.yml"
 README_FILE = "README.md"
 
 if not GEMINI_API_KEY or not GITHUB_TOKEN:
-    print("❌ 錯誤：請先執行 export 設定環境變數！")
+    print("❌ 錯誤：請先設定環境變數 export GEMINI_API_KEY=... 及 GITHUB_TOKEN=...")
     exit(1)
 
 GITHUB_REPO_URL = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_USER}/{GITHUB_REPO}.git"
 
-# ================= 核心 API 函數 =================
+# ================= 核心 API 函數 (含強健診斷邏輯) =================
 
 def get_available_model():
     for version in ["v1", "v1beta"]:
@@ -41,15 +41,40 @@ def get_available_model():
                     if 'flash' in m['name'] and 'generateContent' in m.get('supportedGenerationMethods', []):
                         return m['name'], version
         except: continue
-    raise Exception("無法獲取 Gemini 模型")
+    raise Exception("無法獲取 Gemini 模型，請檢查 API Key 或額度限制。")
 
 def call_gemini_api(prompt, model_id, api_ver):
     url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
-    if response.status_code == 200:
-        return response.json()['candidates'][0]['content']['parts'][0]['text']
-    raise Exception(f"API Error: {response.text}")
+    
+    try:
+        response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
+        res_json = response.json()
+        
+        if response.status_code != 200:
+            print(f"⚠️ API 錯誤詳情: {json.dumps(res_json, indent=2)}")
+            raise Exception(f"HTTP {response.status_code}: {res_json.get('error', {}).get('message', '未知錯誤')}")
+
+        # 針對 'parts' 缺失問題的結構化檢查
+        candidates = res_json.get('candidates', [])
+        if not candidates:
+            # 檢查是否被安全過濾器攔截
+            feedback = res_json.get('promptFeedback', {})
+            print(f"⚠️ 模型未產生候選內容。安全回饋: {json.dumps(feedback, indent=2)}")
+            raise Exception("Gemini 未能產生內容，可能是觸發了安全過濾機制。")
+            
+        content = candidates[0].get('content', {})
+        parts = content.get('parts', [])
+        if not parts:
+            raise Exception("API 回應結構中缺少 'parts' 欄位。")
+            
+        return parts[0]['text']
+        
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"網路請求失敗: {str(e)}")
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"⚠️ 解析失敗的 JSON 原文: {json.dumps(res_json, indent=2)}")
+        raise Exception(f"解析 API 回應失敗: {str(e)}")
 
 # ================= 專案環境初始化 =================
 
@@ -57,12 +82,24 @@ def initialize_android_project():
     os.makedirs(SRC_PATH, exist_ok=True)
     os.makedirs(".github/workflows", exist_ok=True)
     
-    # 1. 啟用 AndroidX (核心配置)
+    # 1. 啟用 AndroidX 與 MultiDex
     with open(PROPERTIES_FILE, "w") as f:
         f.write("android.useAndroidX=true\nandroid.enableJetifier=true\n")
 
-    # 2. 生成 settings.gradle
-    with open(SETTINGS_GRADLE, "w") as f: f.write("include ':app'\n")
+    # 2. 生成 settings.gradle (加入 JitPack 支援繪圖庫)
+    with open(SETTINGS_GRADLE, "w") as f:
+        f.write("""
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' } 
+    }
+}
+include ':app'
+""")
 
     # 3. 生成根目錄 build.gradle
     with open(GRADLE_ROOT_FILE, "w") as f:
@@ -74,11 +111,9 @@ buildscript {
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
     }
 }
-allprojects { repositories { google(); mavenCentral() } }
 """)
 
-    # 4. 生成 app/build.gradle (加入 OkHttp 與 Coroutines)
-    print("📁 更新 app/build.gradle 加入必要依賴...")
+    # 4. 生成 app/build.gradle (穩定依賴配置)
     with open(GRADLE_APP_FILE, "w") as f:
         f.write(f"""
 apply plugin: 'com.android.application'
@@ -92,6 +127,7 @@ android {{
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        multiDexEnabled true
     }}
     buildFeatures {{ compose true }}
     composeOptions {{ kotlinCompilerExtensionVersion '1.5.8' }}
@@ -105,11 +141,10 @@ dependencies {{
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.foundation:foundation'
-    
-    // 網路與非同步處理 (修正 null 錯誤的關鍵)
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0'
+    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+    implementation 'androidx.multidex:multidex:2.0.1'
 }}
 """)
 
@@ -128,7 +163,7 @@ dependencies {{
     </application>
 </manifest>""")
 
-    # 6. GitHub Actions
+    # 6. 生成 GitHub Actions 工作流
     with open(GITHUB_ACTION_FILE, "w") as f:
         f.write("""
 name: Android Build APK
@@ -158,47 +193,48 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= 開發 Agent 邏輯 (強化執行緒安全) =================
+# ================= 開發 Agent 邏輯 =================
 
 def developer_agent_android(task, model_id, api_ver):
     system_instruction = (
-        f"你是一個 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
-        "【絕對規則 - 避免 null 錯誤】:\n"
-        "1. 必須在背景執行緒發送請求：使用 `withContext(Dispatchers.IO)` 包裹 OkHttp 的 `client.newCall().execute()`。\n"
-        "2. UI 更新必須在主執行緒：網路請求完成後，直接更新 `mutableStateOf` 變數即可。\n"
-        "3. 必須包含所有 Import: kotlinx.coroutines.*, okhttp3.*, androidx.compose.runtime.*, androidx.compose.foundation.layout.* 等。\n"
-        "4. 只輸出純代碼，不要 Markdown。"
+        f"你是一位精通 Jetpack Compose 與 MPAndroidChart 的 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
+        "【規範與限制】:\n"
+        "1. 使用 AndroidView 嵌入 LineChart 來顯示走勢圖。\n"
+        "2. 網路請求務必在 withContext(Dispatchers.IO) 內完成。\n"
+        "3. 必須包含所有必要的 Import，不可省略。\n"
+        "4. 直接輸出 Kotlin 程式碼，嚴禁包含任何 Markdown 格式標籤 (如 ```kotlin)。"
     )
-    
-    prompt = f"{system_instruction}\n任務：{task}\n請修正先前的網路請求錯誤，確保 UI 不會因為 Thread 報錯而顯示 null。"
-    
-    code = call_gemini_api(prompt, model_id, api_ver)
-    return code.replace("```kotlin", "").replace("```", "").strip()
+    prompt = f"{system_instruction}\n任務：{task}"
+    return call_gemini_api(prompt, model_id, api_ver)
 
 def github_release_agent(task_name, app_code, readme_content):
-    print(f"🚀 推送至 GitHub...")
+    print(f"🚀 同步至 GitHub...")
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(app_code)
     with open(README_FILE, "w", encoding="utf-8") as f: f.write(readme_content)
     try:
         repo = Repo(".")
         repo.git.add(A=True)
-        repo.index.commit(f"Android Thread-Safe Update: {task_name}")
+        repo.index.commit(f"Android Dev: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main')
-        print(f"✅ 推送成功！")
+        print(f"✅ 完成！請到 GitHub Actions 下載編譯成功的 APK。")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
 
+# ================= 進入點 =================
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("💡 使用方式: python3 agent_android_deploy.py \"任務描述\"")
+        print("💡 Usage: python3 agent_android_deploy.py \"指令內容\"")
         exit(1)
+        
     my_task = sys.argv[1]
     initialize_android_project()
+    
     try:
         model_id, api_ver = get_available_model()
         clean_code = developer_agent_android(my_task, model_id, api_ver)
-        doc_prompt = f"撰寫關於 {my_task} 的 README.md"
+        doc_prompt = f"撰寫 README.md 以說明功能: {my_task}"
         readme_md = call_gemini_api(doc_prompt, model_id, api_ver)
         github_release_agent(my_task, clean_code, readme_md)
     except Exception as e:
-        print(f"💥 錯誤: {e}")
+        print(f"💥 程式終止: {e}")

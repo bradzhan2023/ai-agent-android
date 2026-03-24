@@ -41,7 +41,7 @@ def get_available_model():
                     if 'flash' in m['name'] and 'generateContent' in m.get('supportedGenerationMethods', []):
                         return m['name'], version
         except: continue
-    raise Exception("無法獲取 Gemini 模型，請檢查 API Key。")
+    raise Exception("無法獲取 Gemini 模型。")
 
 def call_gemini_api(prompt, model_id, api_ver):
     url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={GEMINI_API_KEY}"
@@ -49,9 +49,6 @@ def call_gemini_api(prompt, model_id, api_ver):
     try:
         response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
         res_json = response.json()
-        if response.status_code != 200:
-            print(f"⚠️ API 回傳錯誤: {json.dumps(res_json, indent=2)}")
-            raise Exception(f"HTTP {response.status_code}")
         return res_json['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
         raise Exception(f"API 請求失敗: {str(e)}")
@@ -71,9 +68,7 @@ pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal()
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' } 
+        google(); mavenCentral(); maven { url 'https://jitpack.io' } 
     }
 }
 include ':app'
@@ -110,7 +105,6 @@ android {{
     composeOptions {{ kotlinCompilerExtensionVersion '1.5.8' }}
     compileOptions {{ sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }}
     kotlinOptions {{ jvmTarget = '17' }}
-    
     packagingOptions {{
         resources {{
             excludes += '/META-INF/{{AL2.0,LGPL2.1}}'
@@ -127,6 +121,7 @@ dependencies {{
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.foundation:foundation'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.google.code.gson:gson:2.10.1' // 關鍵：補上 Gson 依賴
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
     implementation 'androidx.multidex:multidex:2.0.1'
@@ -176,17 +171,18 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= Agent 開發邏輯 (修正繪圖覆寫錯誤) =================
+# ================= Agent 開發邏輯 =================
 
 def developer_agent_android(task, model_id, api_ver):
     system_instruction = (
         f"你是一個 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
-        "【嚴格規範】:\n"
-        "1. 禁止使用任何自定義 ValueFormatter 或 @Override getAxisLabel，這會導致編譯失敗。請直接使用 LineChart 的預設樣式。\n"
-        "2. 禁止引用 ui.tooling 或任何自定義 Theme，直接使用 MaterialTheme。\n"
-        "3. 網路請求使用 withContext(Dispatchers.IO)，抓取 Binance Kline API (1h 數據)。\n"
-        "4. 圖表繪製請透過 AndroidView(factory = {{ context -> LineChart(context).apply {{ ... }} }}) 實作。\n"
-        "5. 直接輸出 Kotlin 代碼，不要包含 Markdown 標籤。"
+        "【技術要求】:\n"
+        "1. 使用 Gson 庫解析 JSON (com.google.gson.Gson)。\n"
+        "2. 使用 OkHttp 抓取 Binance API。\n"
+        "3. 禁止引用 ui.tooling 或自定義 Theme，僅使用 MaterialTheme。\n"
+        "4. 禁止覆寫 getAxisLabel，使用預設圖表標籤。\n"
+        "5. 包含所有必要的 Import，特別是 com.google.gson.*。\n"
+        "6. 直接輸出 Kotlin 碼，不要 Markdown 標籤。"
     )
     return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
 
@@ -197,22 +193,18 @@ def github_release_agent(task_name, app_code, readme_content):
     try:
         repo = Repo(".")
         repo.git.add(A=True)
-        repo.index.commit(f"Fix Chart Override Error: {task_name}")
+        repo.index.commit(f"Fix Missing Dependencies: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main')
-        print(f"✅ 完成！請到 GitHub Actions 查看結果。")
+        print(f"✅ 完成！")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
 
-# ================= 執行 =================
-
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("💡 Usage: python3 agent_android_deploy.py \"任務描述\"")
+        print("💡 Usage: python3 agent_android_deploy.py \"任務\"")
         exit(1)
-        
     my_task = sys.argv[1]
     initialize_android_project()
-    
     try:
         model_id, api_ver = get_available_model()
         clean_code = developer_agent_android(my_task, model_id, api_ver)

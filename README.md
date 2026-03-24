@@ -1,188 +1,112 @@
-好的，這是一個為您設計的 `README.md` 文件，以及相關的 Python 實作程式碼。
+好的，這是一個為你的金價追蹤 App 撰寫的 `README.md` 檔案範本。它包含了所有你提到的重點，並以標準的 `README` 結構呈現。
 
 ---
 
-# 🪙 PAXGUSDT 金價走勢追蹤器
+# 🪙 PAXG 金價追蹤 App
 
-這個小應用程式旨在提供 PAXG (黃金代幣) 對美元 (USDT) 在幣安交易所的即時價格和 24 小時價格走勢。
+一個簡潔的 Android 應用程式，用於追蹤 PAXG (由 PAXO Gold 發行的代幣化黃金) 對 USDT 的即時價格和歷史走勢。此應用程式從幣安 (Binance) API 獲取數據，並以直觀的介面呈現。
 
 ## ✨ 功能特色
 
-1.  **即時價格顯示**：在頁面頂部以大字體顯示 PAXG/USDT 的當前美元價格。
-2.  **24 小時 K 線數據**：從 Binance API 抓取過去 24 小時的 1 小時 K 線數據。
-3.  **直觀趨勢圖**：下方嵌入 Streamlit 的 `line_chart`，清晰展示 24 小時內的價格走勢。
-4.  **預設標籤**：圖表軸標籤使用 Streamlit 和 Pandas 的預設值，無需額外配置，確保簡潔和穩定運行。
+*   **Binance API 數據抓取**: 定期從 Binance API 抓取 PAXGUSDT 的 1 小時 K 線數據。
+*   **Gson JSON 解析**: 使用 `Gson` 庫高效解析 Binance API 返回的 JSON 陣列數據。
+*   **即時價格顯示**: 在應用程式頂部清晰顯示當前的 PAXG 對 USDT 價格。
+*   **簡潔走勢圖**: 使用 `LineChart` 繪製過去一段時間的價格走勢，提供直觀的視覺化。
+*   **現代化 UI**: 直接採用 `MaterialTheme`，提供現代且一致的使用者介面體驗。
 
 ## 🛠️ 技術棧
 
-*   **Python 3.x**
-*   **Streamlit**：用於快速構建網頁應用介面。
-*   **python-binance**：用於方便地與 Binance API 交互。
-*   **Pandas**：用於數據處理和結構化。
+*   **語言**: Kotlin
+*   **平台**: Android
+*   **網路請求**: Retrofit
+*   **JSON 解析**: Gson
+*   **圖表庫**: MPAndroidChart (或其他類似的 Android LineChart 庫)
+*   **UI/UX**: Material Design Components
 
-## 🚀 如何運行
+## 🚀 專案設定與執行
 
-### 1. 先決條件
+### 前置條件
 
-請確保您的系統已安裝 Python 3.7+ 和 `pip`。
+*   Android Studio
+*   Java Development Kit (JDK)
+*   一台 Android 模擬器或實體設備
 
-### 2. 安裝
+### 安裝步驟
 
-首先，將本專案克隆到您的本地機器：
+1.  **複製專案**:
+    ```bash
+    git clone [你的專案 Git URL]
+    cd PAXG-Gold-Tracker-App
+    ```
+2.  **在 Android Studio 中開啟**:
+    *   開啟 Android Studio。
+    *   選擇 `Open an existing Android Studio project` 並導航到你複製的專案目錄。
+    *   等待 Gradle 同步完成。
 
-```bash
-git clone https://github.com/<你的用戶名>/gold-price-tracker.git
-cd gold-price-tracker
-```
+3.  **Gradle Dependencies**:
+    請確保你的 `app/build.gradle` 檔案中包含以下依賴：
 
-然後，創建一個虛擬環境（推薦做法）：
+    ```gradle
+    // Networking
+    implementation 'com.squareup.retrofit2:retrofit:2.9.0'
+    implementation 'com.squareup.retrofit2:converter-gson:2.9.0' // Gson Converter for Retrofit
 
-```bash
-python -m venv venv
-# 激活虛擬環境 (macOS/Linux)
-source venv/bin/activate
-# 激活虛擬環境 (Windows)
-.\venv\Scripts\activate
-```
+    // Gson (Explicitly adding if not pulled by converter)
+    implementation 'com.google.code.gson:gson:2.10.1'
 
-安裝所需的 Python 函式庫：
+    // Charting Library (Example: MPAndroidChart)
+    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
 
-```bash
-pip install -r requirements.txt
-```
+    // Material Design (if not already included by default)
+    implementation 'com.google.android.material:material:1.x.x' // Use the latest stable version
+    ```
+    *請將 `1.x.x` 替換為你專案使用的最新 Material 版本。*
 
-### 3. 執行應用程式
+4.  **網路權限**:
+    請確保你的 `AndroidManifest.xml` 檔案中包含網路權限：
 
-激活虛擬環境後，運行 Streamlit 應用：
+    ```xml
+    <uses-permission android:name="android.permission.INTERNET" />
+    ```
 
-```bash
-streamlit run gold_tracker.py
-```
+5.  **Gson 相關類別的正確 Import**:
+    在你的數據模型 (data classes) 中，為了 Gson 正確解析，你可能需要使用 `@SerializedName`。請確保所有相關的 Gson 類別都已正確 import。
+    例如，在你的數據模型檔案中 (例如 `KlineData.kt`):
+    ```kotlin
+    import com.google.gson.annotations.SerializedName
+    // ... 其他必要的 import
 
-這將在您的瀏覽器中打開一個新的標籤頁，顯示應用程式介面。
+    data class KlineData(
+        @SerializedName("0") val openTime: Long,
+        @SerializedName("1") val openPrice: String,
+        @SerializedName("2") val highPrice: String,
+        @SerializedName("3") val lowPrice: String,
+        @SerializedName("4") val closePrice: String,
+        // ... 其他你需要的欄位
+    )
+    ```
 
-## 📁 檔案結構
+6.  **執行應用程式**:
+    *   連接你的 Android 設備或啟動模擬器。
+    *   點擊 Android Studio 工具列上的 `Run` 按鈕 (綠色播放圖示)。
 
-```
-.
-├── gold_tracker.py
-├── requirements.txt
-└── README.md
-```
+## 📸 螢幕截圖 (待補)
 
-*   `gold_tracker.py`: 核心 Python 程式碼，負責抓取數據和構建 Streamlit 應用。
-*   `requirements.txt`: 列出所有必要的 Python 函式庫。
-*   `README.md`: 本說明文件。
+[此處可以放置應用程式的截圖]
 
-## 📸 應用程式截圖 (預覽)
+*   想像一個乾淨的介面，頂部有一個大大的數字顯示當前價格，下方是簡潔的折線圖。
 
-*(這裡通常會放一張運行時的應用程式截圖。目前我無法生成，但您可以運行後自行添加。)*
+## 💡 使用說明
 
-預期畫面：
-*   頂部大字體顯示如 "Current PAXG Price: $XXXX.XX"
-*   下方顯示一個帶有 "Time" (X軸) 和 "Price" (Y軸) 預設標籤的折線圖。
+1.  啟動應用程式。
+2.  應用程式會自動從 Binance API 獲取 PAXGUSDT 的最新數據。
+3.  您將在螢幕頂部看到當前的 PAXG 價格。
+4.  下方的折線圖將展示過去一段時間 (1 小時 K 線) 的價格走勢。
 
-## 📜 程式碼 (`gold_tracker.py`)
+## 📜 授權
 
-請將以下內容保存為 `gold_tracker.py` 文件：
+此專案採用 MIT 授權。詳情請參閱 `LICENSE` 檔案。
 
-```python
-import streamlit as st
-import pandas as pd
-from binance.client import Client
-from binance.exceptions import BinanceAPIException
-import datetime
+---
 
-# --- 配置 ---
-# Binance API 公開數據不需要 API Key 和 Secret，可以直接初始化 Client
-# 如果需要交易或私有數據，則需要填寫：
-# api_key = "YOUR_BINANCE_API_KEY"
-# api_secret = "YOUR_BINANCE_API_SECRET"
-# client = Client(api_key, api_secret)
-client = Client("", "") # 使用空字串以示範公開數據抓取
-
-SYMBOL = 'PAXGUSDT'
-INTERVAL = Client.KLINE_INTERVAL_1HOUR # 1 小時 K 線
-LIMIT = 24 # 抓取最近 24 條 K 線 (即過去 24 小時)
-
-# --- 函數：抓取數據 ---
-@st.cache_data(ttl=60) # 緩存數據 60 秒，避免頻繁請求 API
-def fetch_klines_data(symbol, interval, limit):
-    try:
-        klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
-        
-        # klines 數據格式:
-        # [
-        #   [
-        #     1499040000000,      # 開盤時間
-        #     "0.01634790",       # 開盤價
-        #     "0.80000000",       # 最高價
-        #     "0.01575800",       # 最低價
-        #     "0.01577100",       # 收盤價 (我們需要的)
-        #     "148976.10704000",  # 成交量
-        #     1499644799999,      # 收盤時間
-        #     "2434.19055334",    # 成交額
-        #     308,                # 成交筆數
-        #     "1756.87402000",    # 主動買入成交量
-        #     "28.46694368",      # 主動買入成交額
-        #     "0"                 # 忽略
-        #   ]
-        # ]
-
-        df = pd.DataFrame(klines, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume', 
-            'close_time', 'quote_asset_volume', 'number_of_trades', 
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
-        
-        # 轉換數據類型
-        df['close'] = pd.to_numeric(df['close'])
-        # 將 Unix 時間戳轉換為可讀的 datetime 對象
-        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-        
-        # 只保留我們需要的列
-        df = df[['open_time', 'close']]
-        df.rename(columns={'open_time': 'Time', 'close': 'Price'}, inplace=True)
-        
-        return df
-
-    except BinanceAPIException as e:
-        st.error(f"Binance API 錯誤: {e}")
-        return pd.DataFrame() # 返回空 DataFrame
-    except Exception as e:
-        st.error(f"獲取數據時發生錯誤: {e}")
-        return pd.DataFrame()
-
-# --- Streamlit 應用介面 ---
-st.set_page_config(
-    page_title="PAXGUSDT 金價走勢",
-    page_icon="🪙",
-    layout="centered",
-    initial_sidebar_state="auto"
-)
-
-st.title("🪙 PAXG/USDT 金價走勢")
-
-data_df = fetch_klines_data(SYMBOL, INTERVAL, LIMIT)
-
-if not data_df.empty:
-    # 顯示當前價格 (最後一條 K 線的收盤價)
-    current_price = data_df['Price'].iloc[-1]
-    st.markdown(f"## 當前 PAXG 價格: :green[${current_price:.2f}]") # 使用 markdown 語法顯示大字體和顏色
-
-    st.write("---") # 分隔線
-    st.subheader(f"過去 {LIMIT} 小時 PAXG/USDT 價格走勢")
-
-    # 繪製 Line Chart
-    # Streamlit 會自動使用 DataFrame 的列名作為圖表的軸標籤
-    st.line_chart(data_df, x='Time', y='Price')
-
-    # 顯示數據表格 (可選，用於調試或查看詳細數據)
-    # st.subheader("原始數據")
-    # st.dataframe(data_df)
-
-    st.caption(f"數據來源: Binance | 最後更新: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-else:
-    st.warning("未能加載 PAXG/USDT 數據。請檢查網路連接或稍後重試。")
-
-```
+希望這個 `README.md` 對你有幫助！記得將 `[你的專案 Git URL]` 替換為你實際的專案 Git 倉庫連結。

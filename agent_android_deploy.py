@@ -176,21 +176,17 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 """)
 
-# ================= Agent 開發邏輯 (強化版) =================
+# ================= Agent 開發邏輯 (修正繪圖覆寫錯誤) =================
 
 def developer_agent_android(task, model_id, api_ver):
     system_instruction = (
         f"你是一個 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
-        "【嚴格禁令】:\n"
-        "1. 禁止引用 androidx.compose.ui.tooling.*，因為環境中沒有此依賴。\n"
-        "2. 禁止使用任何自定義主題 (如 AiAgentTheme)，請直接使用 androidx.compose.material3.MaterialTheme。\n"
-        "3. 禁止將 @Composable 呼叫放在非 Composable 的環境中。\n"
-        "【技術規範】:\n"
-        "1. 使用 Jetpack Compose UI。\n"
-        "2. 使用 MPAndroidChart 的 LineChart (透過 AndroidView 嵌入)。\n"
-        "3. 網路請求使用 Dispatchers.IO，必須包含 try-catch 解析 JSON。\n"
-        "4. 確保所有 Import (如 androidx.compose.runtime.LaunchedEffect) 都被包含。\n"
-        "5. 直接輸出純程式碼，不可包含 Markdown 標籤。"
+        "【嚴格規範】:\n"
+        "1. 禁止使用任何自定義 ValueFormatter 或 @Override getAxisLabel，這會導致編譯失敗。請直接使用 LineChart 的預設樣式。\n"
+        "2. 禁止引用 ui.tooling 或任何自定義 Theme，直接使用 MaterialTheme。\n"
+        "3. 網路請求使用 withContext(Dispatchers.IO)，抓取 Binance Kline API (1h 數據)。\n"
+        "4. 圖表繪製請透過 AndroidView(factory = {{ context -> LineChart(context).apply {{ ... }} }}) 實作。\n"
+        "5. 直接輸出 Kotlin 代碼，不要包含 Markdown 標籤。"
     )
     return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
 
@@ -201,9 +197,9 @@ def github_release_agent(task_name, app_code, readme_content):
     try:
         repo = Repo(".")
         repo.git.add(A=True)
-        repo.index.commit(f"Fix unresolved reference: {task_name}")
+        repo.index.commit(f"Fix Chart Override Error: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main')
-        print(f"✅ 完成！請到 GitHub Actions 查看綠色勾勾。")
+        print(f"✅ 完成！請到 GitHub Actions 查看結果。")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
 

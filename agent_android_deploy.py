@@ -3,6 +3,7 @@ import sys
 import requests
 import json
 import time
+import subprocess
 from git import Repo
 
 # ================= 配置區域 =================
@@ -58,13 +59,14 @@ def call_gemini_api(prompt, model_id, api_ver):
     except Exception as e:
         raise Exception(f"API 請求失敗: {str(e)}")
 
-# ================= GitHub Actions 監控邏輯 =================
+# ================= GitHub Actions 監控與 Log 抓取 =================
 
 def wait_for_github_action_result():
     api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/actions/runs"
     
-    for _ in range(30):
-        time.sleep(15) # 增加等待時間，Android 編譯較慢
+    # 增加輪詢次數，因為 Android 編譯至少需要 1-2 分鐘
+    for _ in range(40):
+        time.sleep(15)
         try:
             resp = requests.get(api_url, headers=GITHUB_API_HEADERS)
             runs = resp.json().get("workflow_runs", [])
@@ -73,23 +75,31 @@ def wait_for_github_action_result():
             latest_run = runs[0]
             status = latest_run.get("status")
             conclusion = latest_run.get("conclusion")
+            run_id = latest_run.get("id")
             
             if status == "completed":
                 if conclusion == "success":
                     return "success", ""
                 else:
-                    # 【核心改進】：抓取 Jobs 的錯誤訊息
+                    print(f"❌ 編譯失敗 (ID: {run_id})，正在抓取完整 Log...")
+                    # 1. 取得 Job ID
                     jobs_url = latest_run.get("jobs_url")
-                    jobs_resp = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
-                    job_info = jobs_resp.get("jobs", [{}])[0]
+                    job_data = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
+                    if not job_data.get("jobs"): return "failure", "無法取得 Job 資訊"
                     
-                    # 嘗試從步驟中找出失敗的那一步
-                    failed_step = next((s for s in job_info.get("steps", []) if s['conclusion'] == 'failure'), {})
-                    error_context = f"Step '{failed_step.get('name')}' failed."
+                    job_id = job_data["jobs"][0]["id"]
                     
-                    # 💡 提示：如果想更強，可以加入下載 Log 的邏輯
-                    # 但目前我們先給予更明確的導向，讓 AI 知道是 'Build with Gradle' 這一步掛掉
-                    return "failure", f"GitHub Action 失敗於步驟: {error_context}。通常是 MainActivity.kt 第 100-150 行之間的語法或 Import 錯誤。"
+                    # 2. 取得純文字 Log (關鍵修復：使用 /logs API)
+                    raw_log_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/actions/jobs/{job_id}/logs"
+                    log_resp = requests.get(raw_log_url, headers=GITHUB_API_HEADERS)
+                    
+                    if log_resp.status_code == 200:
+                        # 擷取最後 3000 個字元，確保包含 Gradle 的報錯核心
+                        full_log = log_resp.text
+                        error_snippet = full_log[-3000:] if len(full_log) > 3000 else full_log
+                        return "failure", error_snippet
+                    else:
+                        return "failure", f"無法下載 Log, HTTP {log_resp.status_code}"
             
             print(f"   [Action 狀態: {status}...]")
         except Exception as e:
@@ -103,6 +113,14 @@ def initialize_android_project():
     os.makedirs(SRC_PATH, exist_ok=True)
     os.makedirs(".github/workflows", exist_ok=True)
     
+    # 建立 gradle wrapper (關鍵修復：解決 ./gradlew missing)
+    if not os.path.exists("gradlew"):
+        print("🛠️ 正在生成 Gradle Wrapper...")
+        try:
+            subprocess.run(["gradle", "wrapper"], check=True)
+        except:
+            print("⚠️ 本地環境缺少 gradle 指令，嘗試手動寫入基礎配置...")
+
     with open(PROPERTIES_FILE, "w") as f:
         f.write("android.useAndroidX=true\nandroid.enableJetifier=true\n")
 
@@ -207,7 +225,9 @@ jobs:
         with:
           gradle-version: 8.5
       - name: Build with Gradle
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -224,8 +244,8 @@ def developer_agent_android(task, model_id, api_ver):
         "1. 使用 Gson 庫解析 JSON (com.google.gson.Gson)。\n"
         "2. 使用 OkHttp 抓取 Binance API。\n"
         "3. 禁止引用 ui.tooling 或自定義 Theme，僅使用 MaterialTheme。\n"
-        "4. 禁止覆寫 getAxisLabel，使用預設圖表標籤。\n"
-        "5. 包含所有必要的 Import，特別是 com.google.gson.*。\n"
+        "4. 禁止使用 getAxisLabel 覆寫，請使用預設標籤或是正確的 ValueFormatter。\n"
+        "5. 包含所有必要的 Import (如 com.google.gson.*, okhttp3.*)。\n"
         "6. 直接輸出 Kotlin 碼，不要 Markdown 標籤。"
     )
     return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
@@ -234,12 +254,14 @@ def push_to_github(task_name, app_code):
     print(f"🚀 同步代碼至 GitHub...")
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(app_code)
     try:
+        if os.path.exists("gradlew"):
+            os.chmod("gradlew", 0o755) # 確保本地權限正確
+            
         repo = Repo(".")
-        # 確保有 git init
         if not os.path.exists(".git"): repo = Repo.init(".")
         
         repo.git.add(A=True)
-        repo.index.commit(f"Update Android Code: {task_name}")
+        repo.index.commit(f"Update: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main', force=True)
         print(f"✅ 推送成功")
     except Exception as e:
@@ -248,30 +270,28 @@ def push_to_github(task_name, app_code):
 # ================= 自動修復迴圈 =================
 
 def auto_fix_loop(task, model_id, api_ver, max_retries=3):
-    # 1. 第一次嘗試
     print("🛠️ 正在生成初始代碼...")
     code = developer_agent_android(task, model_id, api_ver)
-    push_to_github(task, code)
+    push_to_github("Initial Commit", code)
     
     for i in range(max_retries):
         print(f"🔄 正在等待 GitHub Actions 編譯結果 (第 {i+1}/{max_retries} 次嘗試)...")
-        status, log = wait_for_github_action_result()
+        status, log_output = wait_for_github_action_result()
         
         if status == "success":
             print("✨ [SUCCESS] 編譯成功！APK 已生成。")
             return True
         
-        print(f"❌ [FAILURE] 編譯失敗，正在請求 Gemini 修復...")
+        print(f"❌ [FAILURE] 編譯失敗，正在分析日誌並修復...")
         
-        # 2. 讓 Gemini 分析（可以加入更詳細的 Prompt）
+        # 讓 Gemini 根據真實 Log 進行修復
         fix_prompt = (
-            f"原 Android 任務：{task}\n"
-            f"編譯錯誤描述：{log}\n"
-            f"請修正錯誤，確保所有庫（Gson, OkHttp）都正確導入，並重新提供完整的 MainActivity.kt。"
+            f"原任務：{task}\n\n"
+            f"--- GitHub 編譯日誌最後部分 ---\n{log_output}\n---\n\n"
+            f"以上日誌顯示了編譯失敗的原因（例如找不到引用、語法錯誤或 Import 缺失）。"
+            f"請修正錯誤並重新提供完整的 MainActivity.kt 代碼。"
         )
         code = call_gemini_api(fix_prompt, model_id, api_ver)
-        
-        # 3. 再次推送
         push_to_github(f"Auto-fix Attempt {i+1}", code)
         
     print("🛑 已達到最大重試次數，任務失敗。")
@@ -281,24 +301,26 @@ def auto_fix_loop(task, model_id, api_ver, max_retries=3):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("💡 Usage: python3 agent_android_deploy.py \"任務\"")
+        print("💡 Usage: python3 agent_android_deploy.py \"任務描述\"")
         exit(1)
         
     my_task = sys.argv[1]
+    
+    print("🏗️ 初始化 Android 專案結構...")
     initialize_android_project()
     
     try:
         model_id, api_ver = get_available_model()
+        print(f"🤖 使用模型: {model_id}")
         
         # 執行自動修復迴圈
         success = auto_fix_loop(my_task, model_id, api_ver)
         
         if success:
-            # 成功後更新 README
-            doc_prompt = f"為這個 Android 專案撰寫 README.md: {my_task}"
+            doc_prompt = f"為這個 Android 專案撰寫一個漂亮的 README.md，包含功能介紹與截圖說明: {my_task}"
             readme_md = call_gemini_api(doc_prompt, model_id, api_ver)
             with open(README_FILE, "w", encoding="utf-8") as f: f.write(readme_md)
-            print("📝 README 已更新")
+            print("📝 README 已更新，請至 GitHub 下載 APK！")
             
     except Exception as e:
         print(f"💥 程式執行出錯: {e}")

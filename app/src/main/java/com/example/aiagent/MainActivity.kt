@@ -1,32 +1,34 @@
-好的，針對您提供的 Android 任務和 GitHub Actions 編譯失敗的問題，最常見的原因是 `build.gradle` 配置不正確，尤其是針對第三方庫（如 OkHttp, Gson, MPAndroidChart）的引用。
+好的，這是一個完整的 Android 專案解決方案，包含了 `MainActivity.kt` 內容以及 `build.gradle` (Module: app) 和 `settings.gradle` 的修正，確保所有庫（OkHttp, Gson, MPAndroidChart）都正確導入，並能處理 GitHub Actions 可能遇到的編譯問題。
 
-我將提供一個完整的解決方案，確保所有庫都正確導入，並包含 `MainActivity.kt`、`activity_main.xml`、`AndroidManifest.xml` 以及 `build.gradle` 的正確配置。
+**問題分析與修正：**
 
-### 問題分析與修正策略：
+1.  **Gradle Dependencies:**
+    *   `OkHttp` 和 `Gson` 是標準庫，引用通常不會有大問題。
+    *   `MPAndroidChart` 是一個第三方庫，通常需要從 `JitPack` 倉庫獲取。GitHub Actions 若缺少 `maven { url 'https://jitpack.io' }` 的配置，就會找不到這個庫。
+    *   Kotlin Coroutines (用於異步操作) 的相關依賴也需要正確引入。
+    *   **修正:** 確保在 `settings.gradle` (或較舊的 Gradle 版本中的 `build.gradle` (Project)) 中添加 `maven { url 'https://jitpack.io' }`，並在 `build.gradle` (Module: app) 中引入所有必要庫及其最新穩定版本。
 
-1.  **Gradle Dependencies (最重要的環節):**
-    *   **OkHttp & Gson:** 確保使用最新穩定版並正確聲明 `implementation 'com.squareup.okhttp3:okhttp:...'` 和 `implementation 'com.google.code.gson:gson:...'`。
-    *   **MPAndroidChart:** 這是一個常見的錯誤源。它通常需要額外的 Maven 倉庫配置 (`jitpack.io`)。
-        *   需要在專案根目錄的 `settings.gradle` (或舊版 Gradle 的 `build.gradle` 頂層) 中添加 `maven { url 'https://jitpack.io' }`。
-        *   然後在 `app/build.gradle` 中聲明 `implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'`。
-    *   **Kotlin Coroutines:** 為了非同步網路請求，我們將使用 Kotlin Coroutines，這需要 `lifecycle-runtime-ktx` 和 `kotlinx-coroutines-android`。
-2.  **AndroidManifest.xml:** 確保有 `INTERNET` 權限。
-3.  **MainActivity.kt:**
-    *   使用 OkHttp 進行網路請求。
-    *   使用 Gson 解析 JSON。
-    *   使用 `lifecycleScope` 和 `Dispatchers.IO` 執行背景操作，並在 `Dispatchers.Main` 更新 UI。
-    *   初始化並配置 `MPAndroidChart` 來顯示 24 小時走勢。
-4.  **activity_main.xml:** 佈局包含一個 `TextView` 顯示當前價格和一個 `LineChart`。
+2.  **AndroidManifest.xml:**
+    *   網路操作必須有 `INTERNET` 權限。
+    *   **修正:** 添加 `<uses-permission android:name="android.permission.INTERNET" />`。
+
+3.  **MainActivity.kt 邏輯:**
+    *   **網路請求 (OkHttp):** 必須在背景執行緒進行。使用 Kotlin Coroutines (`lifecycleScope`) 是現代 Android 的最佳實踐。
+    *   **JSON 解析 (Gson):** Binance 的 `klines` API 返回的是 `List<List<String>>` 結構，需要正確解析。
+    *   **UI 更新:** 任何 UI 操作都必須在主執行緒進行。
+    *   **圖表繪製 (MPAndroidChart):** 初始化圖表、準備資料、更新圖表。
+    *   **錯誤處理:** 網路錯誤、解析錯誤、API 返回空資料等情況。
+    *   **修正:** 實作上述邏輯，包含 loading 狀態、錯誤顯示。為圖表的 X 軸添加日期時間格式化器，使其顯示更清晰。
 
 ---
 
-### 完整程式碼解決方案
+### 專案結構與檔案內容
 
-#### 1. `settings.gradle` (專案根目錄)
+你需要更新以下檔案。
 
-**這是修正 MPAndroidChart 引用錯誤的關鍵一步。**
+**1. `settings.gradle.kts` (Project Level)**
 
-```gradle
+```kotlin
 pluginManagement {
     repositories {
         google()
@@ -35,93 +37,99 @@ pluginManagement {
     }
 }
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_NON_TRANSITIVE_DEPENDENCIES)
     repositories {
         google()
         mavenCentral()
-        // !!! 修正點：添加 JitPack 倉庫以引用 MPAndroidChart
-        maven { url 'https://jitpack.io' }
+        // *** 確保為 MPAndroidChart 添加此行 ***
+        maven { url = uri("https://jitpack.io") }
     }
 }
-rootProject.name = "GoldTracker" // 您的專案名稱
-include ':app'
+
+rootProject.name = "BinancePAXGTracker" // 你的專案名稱
+include(":app")
 ```
 
-#### 2. `app/build.gradle` (模組級別)
+**2. `app/build.gradle.kts` (Module Level)**
 
-```gradle
+```kotlin
 plugins {
-    id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
-    namespace 'com.example.goldtracker' // 替換為您的應用包名
-    compileSdk 34
+    namespace = "com.yourcompany.binancepaxtracker" // 修改為你的包名
+    compileSdk = 34
 
     defaultConfig {
-        applicationId "com.example.goldtracker" // 替換為您的應用包名
-        minSdk 24
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        applicationId = "com.yourcompany.binancepaxtracker" // 修改為你的包名
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = "1.8"
     }
+    // 啟用 View Binding
     buildFeatures {
-        viewBinding true // 啟用 ViewBinding 方便訪問視圖
+        viewBinding = true
     }
 }
 
 dependencies {
-    // AndroidX 核心庫
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.10.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    // AndroidX
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
 
-    // Kotlin Coroutines for asynchronous operations
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2' // For lifecycleScope
+    // Kotlin Coroutines for async operations
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0") // For lifecycleScope
 
-    // !!! 修正點：OkHttp for networking
-    implementation 'com.squareup.okhttp3:okhttp:4.11.0' // 使用最新穩定版
+    // OkHttp for network requests
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // !!! 修正點：Gson for JSON parsing
-    implementation 'com.google.code.gson:gson:2.10.1' // 使用最新穩定版
+    // Gson for JSON parsing
+    implementation("com.google.code.gson:gson:2.10.1")
 
-    // !!! 修正點：MPAndroidChart for charting
-    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0' // 確保版本號與 JitPack 兼容
+    // MPAndroidChart for line chart
+    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
 
-    // Testing
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    // Testing dependencies
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 }
 ```
 
-#### 3. `AndroidManifest.xml`
+**3. `app/src/main/AndroidManifest.xml`**
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- !!! 修正點：添加 INTERNET 權限 -->
+    <!-- 必需的網路權限 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -132,7 +140,7 @@ dependencies {
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.GoldTracker"
+        android:theme="@style/Theme.BinancePAXGTracker"
         tools:targetApi="31">
         <activity
             android:name=".MainActivity"
@@ -147,260 +155,290 @@ dependencies {
 </manifest>
 ```
 
-#### 4. `activity_main.xml`
+**4. `app/src/main/res/layout/activity_main.xml`**
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
     android:padding="16dp"
     tools:context=".MainActivity">
 
     <TextView
-        android:id="@+id/priceLabel"
+        android:id="@+id/tvTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="PAXGUSDT Current Price:"
-        android:textSize="18sp"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:text="PAXGUSDT 價格追蹤 (24H)"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="16dp"/>
 
     <TextView
-        android:id="@+id/currentPriceTextView"
+        android:id="@+id/tvCurrentPriceLabel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:text="Loading..."
+        android:text="當前價格:"
+        android:textSize="16sp"
+        android:layout_marginBottom="4dp"/>
+
+    <TextView
+        android:id="@+id/tvCurrentPrice"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="---"
         android:textSize="24sp"
         android:textStyle="bold"
-        app:layout_constraintBaseline_toBaselineOf="@id/priceLabel"
-        app:layout_constraintStart_toEndOf="@id/priceLabel"
-        tools:text="3000.00 USDT" />
+        android:textColor="@color/design_default_color_primary"
+        android:layout_marginBottom="16dp"/>
 
     <ProgressBar
         android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="center"
         android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:indeterminateTint="@color/design_default_color_primary"
+        />
+
+    <TextView
+        android:id="@+id/tvError"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@android:color/holo_red_dark"
+        android:textSize="16sp"
+        android:textAlignment="center"
+        android:visibility="gone"
+        android:layout_marginBottom="16dp"
+        tools:text="錯誤訊息顯示在這裡"/>
 
     <com.github.mikephil.charting.charts.LineChart
-        android:id="@+id/lineChart"
-        android:layout_width="0dp"
+        android:id="@+id/priceChart"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="16dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/currentPriceTextView" />
+        android:layout_weight="1"
+        android:visibility="gone"/> <!-- 初始隱藏，載入完成後顯示 -->
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+</LinearLayout>
 ```
 
-#### 5. `MainActivity.kt`
+**5. `app/src/main/java/com/yourcompany/binancepaxtracker/MainActivity.kt`**
 
 ```kotlin
-package com.example.goldtracker // 替換為您的應用包名
+package com.yourcompany.binancepaxtracker
 
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
-import android.widget.TextView
-import android.widget.ProgressBar
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.AxisBase
+import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
+import com.github.mikephil.charting.formatter.ValueFormatter
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
+import com.google.gson.reflect.TypeToken
+import com.yourcompany.binancepaxtracker.databinding.ActivityMainBinding // 確保你的包名正確
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.text.DecimalFormat
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
-    private val client = OkHttpClient.Builder()
+    private lateinit var binding: ActivityMainBinding
+    private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
     private val gson = Gson()
 
-    private lateinit var currentPriceTextView: TextView
-    private lateinit var lineChart: LineChart
-    private lateinit var progressBar: ProgressBar
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        currentPriceTextView = findViewById(R.id.currentPriceTextView)
-        lineChart = findViewById(R.id.lineChart)
-        progressBar = findViewById(R.id.progressBar)
-
-        fetchData()
+        setupChart()
+        fetchBinanceData()
     }
 
-    private fun fetchData() {
-        progressBar.visibility = View.VISIBLE
+    private fun setupChart() {
+        binding.priceChart.apply {
+            description.isEnabled = false // 不顯示描述文字
+            setTouchEnabled(true)       // 允許觸摸互動
+            isDragEnabled = true        // 允許拖曳
+            setScaleEnabled(true)       // 允許縮放
+            setPinchZoom(true)          // 允許手勢縮放
+
+            xAxis.apply {
+                position = XAxis.XAxisPosition.BOTTOM // X軸顯示在底部
+                setDrawGridLines(false)       // 不繪製X軸網格線
+                textColor = Color.BLACK
+                valueFormatter = DateAxisFormatter() // 自定義X軸格式化器
+            }
+
+            axisLeft.apply {
+                setDrawGridLines(true)        // 繪製Y軸網格線
+                textColor = Color.BLACK
+            }
+            axisRight.isEnabled = false   // 不顯示右側Y軸
+
+            legend.isEnabled = false      // 不顯示圖例
+            animateX(1000)                // X軸動畫
+        }
+    }
+
+    private fun fetchBinanceData() {
+        // 顯示載入指示器，隱藏圖表和錯誤訊息
+        binding.progressBar.visibility = View.VISIBLE
+        binding.priceChart.visibility = View.GONE
+        binding.tvError.visibility = View.GONE
+        binding.tvCurrentPrice.text = "載入中..."
+
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val currentPrice = fetchCurrentPrice()
-                val klineData = fetchKlineData()
+                // Binance Klines API:
+                // symbol: 交易對 (PAXGUSDT)
+                // interval: K線間隔 (1h 代表 1 小時)
+                // limit: 返回 K 線的數量 (24 代表 24 小時的數據)
+                val url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24"
+                val request = Request.Builder().url(url).build()
+                val response = okHttpClient.newCall(request).execute()
 
-                withContext(Dispatchers.Main) {
-                    currentPriceTextView.text = "${currentPrice?.price} USDT"
-                    if (klineData != null) {
-                        setupChart(klineData)
+                if (response.isSuccessful) {
+                    val jsonString = response.body?.string()
+                    val type = object : TypeToken<List<List<String>>>() {}.type
+                    val klines: List<List<String>> = gson.fromJson(jsonString, type)
+
+                    if (klines.isNotEmpty()) {
+                        // Klines 數據格式:
+                        // [
+                        //   [0] open time,
+                        //   [1] open,
+                        //   [2] high,
+                        //   [3] low,
+                        //   [4] close,
+                        //   [5] volume,
+                        //   [6] close time,
+                        //   ...
+                        // ]
+
+                        // 提取收盤價和時間戳
+                        val entries = ArrayList<Entry>()
+                        val timestamps = ArrayList<Long>() // 用於X軸格式化
+                        var lastPrice = ""
+
+                        klines.forEachIndexed { index, kline ->
+                            val closePrice = kline[4].toFloat() // 收盤價
+                            val openTime = kline[0].toLong()   // 開盤時間 (毫秒)
+                            entries.add(Entry(index.toFloat(), closePrice)) // X軸使用索引，Y軸使用價格
+                            timestamps.add(openTime)
+
+                            if (index == klines.size - 1) {
+                                lastPrice = kline[4] // 最後一個數據點為當前價格
+                            }
+                        }
+
+                        withContext(Dispatchers.Main) {
+                            binding.progressBar.visibility = View.GONE
+                            binding.priceChart.visibility = View.VISIBLE
+                            binding.tvCurrentPrice.text = String.format("%.2f USDT", lastPrice.toFloat()) // 顯示當前價格
+                            updateChartData(entries, timestamps)
+                        }
                     } else {
-                        Toast.makeText(this@MainActivity, "Failed to load chart data", Toast.LENGTH_LONG).show()
+                        withContext(Dispatchers.Main) {
+                            binding.progressBar.visibility = View.GONE
+                            binding.tvError.visibility = View.VISIBLE
+                            binding.tvError.text = "未獲取到數據。"
+                            binding.tvCurrentPrice.text = "---"
+                        }
                     }
+                } else {
+                    val errorMessage = response.body?.string() ?: response.message
+                    throw IOException("HTTP Error: ${response.code} - $errorMessage")
                 }
-            } catch (e: IOException) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Network error: ${e.message}", Toast.LENGTH_LONG).show()
-                    currentPriceTextView.text = "Error"
-                }
-                e.printStackTrace()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                    currentPriceTextView.text = "Error"
-                }
-                e.printStackTrace()
-            } finally {
-                withContext(Dispatchers.Main) {
-                    progressBar.visibility = View.GONE
+                    binding.progressBar.visibility = View.GONE
+                    binding.tvError.visibility = View.VISIBLE
+                    binding.tvError.text = "載入失敗: ${e.localizedMessage}"
+                    binding.tvCurrentPrice.text = "---"
+                    e.printStackTrace()
                 }
             }
         }
     }
 
-    private fun fetchCurrentPrice(): TickerPriceResponse? {
-        val request = Request.Builder()
-            .url("https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT")
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Unexpected code ${response}")
-
-            val json = response.body?.string() ?: return null
-            return gson.fromJson(json, TickerPriceResponse::class.java)
+    private fun updateChartData(entries: ArrayList<Entry>, timestamps: ArrayList<Long>) {
+        val dataSet = LineDataSet(entries, "PAXGUSDT Price").apply {
+            color = Color.BLUE
+            setCircleColor(Color.BLUE)
+            setDrawCircles(false) // 不繪製數據點圓圈
+            lineWidth = 2f
+            valueTextSize = 0f    // 不在圖表上顯示值
+            mode = LineDataSet.Mode.LINEAR // 平滑曲線
+            setDrawFilled(true) // 填充線下方區域
+            fillColor = Color.parseColor("#ADD8E6") // 淺藍色填充
+            fillAlpha = 80 // 填充透明度
         }
-    }
-
-    // Binance klines API returns a list of lists:
-    // [
-    //   [
-    //     1499040000000,      // Open time
-    //     "0.01634790",       // Open
-    //     "0.80000000",       // High
-    //     "0.01575800",       // Low
-    //     "0.01577100",       // Close
-    //     "148976.10704000",  // Volume
-    //     1499644799999,      // Close time
-    //     "2434.19013972",    // Quote asset volume
-    //     308,                // Number of trades
-    //     "1756.87402397",    // Taker buy base asset volume
-    //     "28.46694368",      // Taker buy quote asset volume
-    //     "0"                 // Ignore.
-    //   ]
-    // ]
-    // We are interested in Close time (index 6) and Close price (index 4)
-    private fun fetchKlineData(): List<Entry>? {
-        val request = Request.Builder()
-            .url("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24") // Last 24 hours, 1-hour interval
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Unexpected code ${response}")
-
-            val json = response.body?.string() ?: return null
-            val type = com.google.gson.reflect.TypeToken.getParameterized(
-                List::class.java,
-                List::class.java
-            ).type
-            val klines: List<List<String>> = gson.fromJson(json, type)
-
-            // Convert kline data to MPAndroidChart Entry objects
-            val entries = mutableListOf<Entry>()
-            klines.forEachIndexed { index, kline ->
-                // x-axis is index (representing 1-hour intervals), y-axis is close price
-                val closePrice = kline[4].toFloat() // Close price is at index 4
-                entries.add(Entry(index.toFloat(), closePrice))
-            }
-            return entries
-        }
-    }
-
-    private fun setupChart(entries: List<Entry>) {
-        val dataSet = LineDataSet(entries, "PAXGUSDT 24h Price")
-        dataSet.color = Color.rgb(255, 165, 0) // Orange color
-        dataSet.valueTextColor = Color.BLACK
-        dataSet.setDrawCircles(false) // Don't draw circles on data points
-        dataSet.lineWidth = 2f
-        dataSet.valueTextSize = 0f // Hide value text on chart
-
-        // Customize Y-axis (left)
-        val leftAxis = lineChart.axisLeft
-        leftAxis.textColor = Color.BLACK
-        leftAxis.setDrawGridLines(true)
-        leftAxis.gridColor = Color.parseColor("#E0E0E0") // Light grey grid lines
-
-        // Customize X-axis
-        val xAxis = lineChart.xAxis
-        xAxis.textColor = Color.BLACK
-        xAxis.setDrawGridLines(false) // No vertical grid lines
-        xAxis.position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
-        xAxis.setLabelCount(5, true) // Show approx 5 labels, force interval
-        // You can add a custom ValueFormatter here to show actual times or relative hours
-        // For simplicity, we'll keep the default index labels.
-
-        // Right Y-axis
-        lineChart.axisRight.isEnabled = false // Disable right Y-axis
-
-        // Chart general settings
-        lineChart.description.isEnabled = false // No description label
-        lineChart.legend.textColor = Color.BLACK // Legend text color
-        lineChart.setTouchEnabled(true)
-        lineChart.setPinchZoom(true)
-        lineChart.animateX(1500) // Animation
 
         val lineData = LineData(dataSet)
-        lineChart.data = lineData
-        lineChart.invalidate() // Refresh chart
+        binding.priceChart.data = lineData
+
+        // 更新X軸格式化器中的時間戳
+        (binding.priceChart.xAxis.valueFormatter as DateAxisFormatter).setTimestamps(timestamps)
+
+        binding.priceChart.invalidate() // 刷新圖表
     }
 
-    // Data class for current price response
-    data class TickerPriceResponse(
-        @SerializedName("symbol") val symbol: String,
-        @SerializedName("price") val price: String
-    )
+    // 自定義X軸格式化器，用於將索引轉換為時間
+    private class DateAxisFormatter : ValueFormatter() {
+        private val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+        private var timestamps: List<Long> = emptyList()
+
+        fun setTimestamps(timestamps: List<Long>) {
+            this.timestamps = timestamps
+        }
+
+        override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+            val index = value.toInt()
+            return if (index >= 0 && index < timestamps.size) {
+                val date = Date(timestamps[index])
+                dateFormat.format(date)
+            } else {
+                ""
+            }
+        }
+    }
 }
 ```
 
-### 如何運行和測試：
+---
 
-1.  **複製並替換文件:** 將上述內容複製到您的 Android 專案中的相應文件。請特別注意 `settings.gradle` 的修改。
-2.  **替換包名:** 確保 `namespace` 和 `applicationId` 在 `app/build.gradle` 以及 `package com.example.goldtracker` 在 `MainActivity.kt` 中與您的專案實際包名匹配。
-3.  **Sync Project with Gradle Files:** 在 Android Studio 中，點擊工具欄上的 "Sync Project with Gradle Files" 按鈕，讓 Gradle 下載並配置所有依賴。
-4.  **運行應用:** 在模擬器或實體設備上運行應用。
+### 如何使用：
 
-這樣，您的應用應該就能成功編譯並在 GitHub Actions 上執行，並且能夠抓取 PAXGUSDT 金價，顯示當前價格，並繪製 24 小時走勢圖。
+1.  **新建 Android 專案：** 在 Android Studio 中創建一個新的 "Empty Activity" 專案。
+    *   選擇 `Kotlin` 作為語言。
+    *   `Minimum SDK` 建議 `API 24` 或更高。
+2.  **更新 `settings.gradle.kts`：** 將上面提供的 `settings.gradle.kts` 內容複製貼上，特別注意 `maven { url = uri("https://jitpack.io") }` 這行。
+3.  **更新 `app/build.gradle.kts`：** 將上面提供的 `app/build.gradle.kts` 內容複製貼上。請務必將 `namespace` 和 `applicationId` 改為你的專案包名。
+4.  **更新 `AndroidManifest.xml`：** 將上面提供的 `AndroidManifest.xml` 內容複製貼上，確保 `INTERNET` 權限已添加。
+5.  **更新 `activity_main.xml`：** 將上面提供的 `activity_main.xml` 內容複製貼上到你的 `app/src/main/res/layout/activity_main.xml` 檔案中。
+6.  **更新 `MainActivity.kt`：** 將上面提供的 `MainActivity.kt` 內容複製貼上到你的 `app/src/main/java/你的包名/MainActivity.kt` 檔案中。請注意修改 `package` 行為你的實際包名，以及 `import com.yourcompany.binancepaxtracker.databinding.ActivityMainBinding` 這行中的包名。
+7.  **Sync Project with Gradle Files：** 在 Android Studio 中點擊 "Sync Project with Gradle Files" 按鈕 (通常在右上角，或透過 `File -> Sync Project with Gradle Files`)，讓 Gradle 下載所有依賴庫。
+8.  **運行應用程式：** 在模擬器或實體設備上運行應用程式。它應該會顯示 PAXGUSDT 的當前價格和過去 24 小時的價格走勢圖。
+
+透過這些步驟，你的 Android 專案將能夠正確編譯並執行金價追蹤功能，同時也解決了 GitHub Actions 上可能遇到的庫引用問題。

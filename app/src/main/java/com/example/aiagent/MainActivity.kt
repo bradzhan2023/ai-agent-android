@@ -3,145 +3,179 @@ package com.example.aiagent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.Response
 import java.io.IOException
-import com.google.gson.Gson
-import com.google.gson.JsonParser
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
 
-import com.patrykandpatrick.vico.compose.chart.Chart
-import com.patrykandpatrick.vico.compose.chart.line.lineChart
-import com.patrykandpatrick.vico.compose.chart.line.lineSpec
-import com.patrykandpatrick.vico.compose.component.shape.shader.verticalGradient
-import com.patrykandpatrick.vico.compose.chart.scroll.rememberChartScrollState
-import com.patrykandpatrick.vico.core.entry.entryOf
-import com.patrykandpatrick.vico.core.entry.diff.MutableLineEntryModelProducer
+// Vico Chart Imports for Jetpack Compose
 import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
 import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
-import com.patrykandpatrick.vico.compose.component.shape.shader.BrushShader
-import com.patrykandpatrick.vico.core.component.shape.shader.DynamicShader
-import androidx.compose.ui.text.font.FontWeight
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.patrykandpatrick.vico.compose.chart.Chart
+import com.patrykandpatrick.vico.compose.chart.line.lineChart
+import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
+import com.patrykandpatrick.vico.core.entry.FloatEntry
 
-// Data class to hold relevant Kline data for our chart
+/**
+ * Data model for a single candlestick (Kline) from Binance API.
+ * Only includes fields relevant for a simple price line chart.
+ */
 data class KlineData(
-    val closeTime: Long,
-    val closePrice: Double
+    val openTime: Long,      // Open time of the candlestick in milliseconds
+    val openPrice: Double,   // Open price
+    val highPrice: Double,   // Highest price during the interval
+    val lowPrice: Double,    // Lowest price during the interval
+    val closePrice: Double,  // Close price
+    val volume: Double       // Volume traded during the interval
+    // Other fields from Binance klines API (e.g., closeTime, quoteAssetVolume, numberOfTrades)
+    // are omitted for brevity as they are not used for this simple line chart.
 )
 
-// Helper function to parse Binance kline data from raw JSON string
-fun parseBinanceKlineData(jsonString: String): List<KlineData> {
-    val klines = mutableListOf<KlineData>()
-    try {
-        val jsonArray: JsonArray = JsonParser.parseString(jsonString).asJsonArray
-        jsonArray.forEach { element ->
-            val innerArray = element.asJsonArray
-            // Binance kline array structure:
-            // [0] Open time
-            // [1] Open price
-            // [2] High price
-            // [3] Low price
-            // [4] Close price
-            // [5] Volume
-            // [6] Close time
-            // ... and more.
-            if (innerArray.size() > 6) { // Ensure required indices exist
-                val closeTime = innerArray[6].asLong
-                val closePrice = innerArray[4].asString.toDouble()
-                klines.add(KlineData(closeTime, closePrice))
+/**
+ * ViewModel for fetching and managing PAXGUSDT price data.
+ * Uses OkHttp for network requests and Gson for JSON parsing.
+ */
+class PriceTrackerViewModel : ViewModel() {
+    private val client = OkHttpClient()
+    private val gson = Gson()
+
+    // State holders for UI updates
+    var latestPrice by mutableStateOf<Double?>(null)
+        private set
+    var priceEntries by mutableStateOf(ChartEntryModelProducer())
+        private set
+    var errorMessage by mutableStateOf<String?>(null)
+        private set
+
+    /**
+     * Fetches PAXGUSDT klines (candlestick) data from the Binance API.
+     * It requests data for the last 24 hours with a 1-hour interval, resulting in 24 data points.
+     * The fetched JSON is parsed into a list of [KlineData] and used to update the UI state.
+     */
+    fun fetchBinanceData() {
+        viewModelScope.launch(Dispatchers.IO) { // Perform network operation on IO dispatcher
+            // Binance API endpoint for klines data
+            val url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24"
+            val request = Request.Builder().url(url).build()
+
+            try {
+                val response: Response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string()
+                    responseBody?.let {
+                        // Gson parsing: Binance klines API returns a list of lists of strings
+                        val klineListType = object : TypeToken<List<List<String>>>() {}.type
+                        val rawKlineData: List<List<String>> = gson.fromJson(it, klineListType)
+
+                        // Map the raw string data into our structured KlineData objects
+                        val parsedData = rawKlineData.mapNotNull { klineArray ->
+                            // A valid Binance kline array has at least 12 elements. We only need the first 6.
+                            if (klineArray.size >= 6) {
+                                try {
+                                    KlineData(
+                                        openTime = klineArray[0].toLong(),
+                                        openPrice = klineArray[1].toDouble(),
+                                        highPrice = klineArray[2].toDouble(),
+                                        lowPrice = klineArray[3].toDouble(),
+                                        closePrice = klineArray[4].toDouble(),
+                                        volume = klineArray[5].toDouble()
+                                    )
+                                } catch (e: NumberFormatException) {
+                                    // Handle cases where number conversion fails (e.g., malformed data)
+                                    errorMessage = "Data parsing error: ${e.message}"
+                                    null // Skip this malformed data point
+                                }
+                            } else {
+                                errorMessage = "Malformed data received from Binance API."
+                                null // Skip malformed kline arrays
+                            }
+                        }
+
+                        if (parsedData.isNotEmpty()) {
+                            // Update the latest price with the close price of the last data point
+                            latestPrice = parsedData.last().closePrice
+
+                            // Prepare chart entries for Vico.
+                            // X-axis values are simply indices (0 to 23 for 24 hours),
+                            // Y-axis values are the close prices.
+                            val entries = parsedData.mapIndexed { index, data ->
+                                FloatEntry(x = index.toFloat(), y = data.closePrice.toFloat())
+                            }
+                            priceEntries.setEntries(listOf(entries)) // Update chart data
+                            errorMessage = null // Clear any previous error messages
+                        } else {
+                            errorMessage = "No PAXGUSDT data received or successfully parsed."
+                            latestPrice = null
+                            priceEntries.setEntries(emptyList())
+                        }
+                    } ?: run {
+                        errorMessage = "Empty response body from Binance API."
+                        latestPrice = null
+                        priceEntries.setEntries(emptyList())
+                    }
+                } else {
+                    errorMessage = "Error fetching data: ${response.code} ${response.message}"
+                    latestPrice = null
+                    priceEntries.setEntries(emptyList())
+                }
+            } catch (e: IOException) {
+                errorMessage = "Network error: Please check your internet connection. (${e.message})"
+                latestPrice = null
+                priceEntries.setEntries(emptyList())
+            } catch (e: Exception) {
+                // Catch any other unexpected errors during parsing or state updates
+                errorMessage = "An unexpected error occurred: ${e.message}"
+                latestPrice = null
+                priceEntries.setEntries(emptyList())
             }
         }
-    } catch (e: Exception) {
-        e.printStackTrace()
     }
-    return klines
 }
 
+/**
+ * Main Activity for the Android application.
+ * It sets up the Jetpack Compose UI to display PAXGUSDT price and its 24-hour trend.
+ */
 class MainActivity : ComponentActivity() {
-
-    private val client = OkHttpClient()
-    private val klineModelProducer = MutableLineEntryModelProducer()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme { // Using MaterialTheme as required
+            // Apply MaterialTheme as required by the technical specification
+            MaterialTheme {
+                // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    BinancePriceTrackerScreen(klineModelProducer, client)
+                    PriceTrackerScreen()
                 }
             }
         }
-
-        // Fetch historical kline data when the activity is created
-        fetchBinanceKlineData()
-    }
-
-    private fun fetchBinanceKlineData() {
-        // Fetch 24 hours of 1-hour interval data for PAXGUSDT
-        val url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24"
-        val request = Request.Builder().url(url).build()
-
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                e.printStackTrace()
-                // Handle network error, e.g., show a toast or update an error state
-                lifecycleScope.launch(Dispatchers.Main) {
-                    // Could update a UI state here to show an error message
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.body?.string()?.let { jsonString ->
-                    val klines = parseBinanceKlineData(jsonString)
-                    val entries = klines.mapIndexed { index, kline ->
-                        // Using index as the X-axis value for default chart labels as per requirement
-                        entryOf(index.toFloat(), kline.closePrice.toFloat())
-                    }
-                    // Update the chart data on the main thread
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        klineModelProducer.setEntries(listOf(entries))
-                    }
-                }
-            }
-        })
     }
 }
 
+/**
+ * Composable function for the main price tracker screen.
+ * It displays the current price, potential error messages, and a 24-hour line chart.
+ */
 @Composable
-fun BinancePriceTrackerScreen(
-    klineModelProducer: MutableLineEntryModelProducer,
-    client: OkHttpClient // OkHttpClient instance for fetching current price
-) {
-    val currentPriceState = remember { mutableStateOf("Loading...") }
-    val lastUpdateTimeState = remember { mutableStateOf("") }
-    val chartScrollState = rememberChartScrollState()
-
-    // Fetch current price when the screen is first composed
+fun PriceTrackerScreen(viewModel: PriceTrackerViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
+    // LaunchedEffect ensures data fetching occurs only once when the composable enters composition
     LaunchedEffect(Unit) {
-        fetchCurrentPrice(client, currentPriceState, lastUpdateTimeState)
+        viewModel.fetchBinanceData()
     }
 
     Column(
@@ -149,103 +183,73 @@ fun BinancePriceTrackerScreen(
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        // App title
         Text(
             text = "PAXGUSDT Price Tracker",
             style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        Text(
-            text = "Current Price: ${currentPriceState.value}",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        Text(
-            text = "Last Updated: ${lastUpdateTimeState.value}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
+        // Display the latest fetched price or a loading message
+        viewModel.latestPrice?.let { price ->
+            Text(
+                text = "Current PAXGUSDT Price: $%.2f".format(price),
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(bottom = 8.dp),
+                color = MaterialTheme.colorScheme.primary
+            )
+        } ?: run {
+            Text(
+                text = "Fetching price...",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(bottom = 8.dp),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        // Display any error messages from the ViewModel
+        viewModel.errorMessage?.let { error ->
+            Text(
+                text = "Error: $error",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Title for the chart section
         Text(
             text = "24-Hour Price Trend (Hourly)",
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        // Chart area for the 24-hour trend
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(300.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), MaterialTheme.shapes.medium)
-                .padding(8.dp)
-        ) {
+        // Vico Chart implementation
+        // Only display the chart if there is data available
+        if (viewModel.priceEntries.entryCollections.isNotEmpty()) {
+            val chartModel = viewModel.priceEntries
             Chart(
-                chart = lineChart(
-                    lines = listOf(
-                        lineSpec(
-                            lineColor = MaterialTheme.colorScheme.primary,
-                            lineBackgroundShader = DynamicShader(
-                                BrushShader(
-                                    Brush.verticalGradient(
-                                        listOf(
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0f)
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                ),
-                modelProducer = klineModelProducer,
-                // Using default axis implementations, which use default labels as required
+                chart = lineChart(), // Use a simple line chart
+                model = chartModel,
+                // Use default start (vertical) axis labels for price values
                 startAxis = rememberStartAxis(),
+                // Use default bottom (horizontal) axis labels.
+                // The requirement is to "禁止覆寫 getAxisLabel，使用預設圖表標籤",
+                // so no custom valueFormatter is applied to display indices 0-23 directly.
                 bottomAxis = rememberBottomAxis(),
-                chartScrollState = chartScrollState,
-                isZoomEnabled = false, // Disable zoom for simplicity
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(250.dp) // Set a fixed height for the chart
+                    .padding(vertical = 8.dp)
+            )
+        } else {
+            // Show a message if no chart data is available (e.g., during initial load or after an error)
+            Text(
+                text = "No chart data available.",
+                modifier = Modifier.padding(top = 16.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
-}
-
-// Function to fetch the most recent price for display
-private fun fetchCurrentPrice(
-    client: OkHttpClient,
-    currentPriceState: MutableState<String>,
-    lastUpdateTimeState: MutableState<String>
-) {
-    // Use the ticker price API for the very latest price
-    val url = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
-    val request = Request.Builder().url(url).build()
-
-    client.newCall(request).enqueue(object : Callback {
-        override fun onFailure(call: Call, e: IOException) {
-            e.printStackTrace()
-            currentPriceState.value = "Error fetching price"
-            lastUpdateTimeState.value = "N/A"
-        }
-
-        override fun onResponse(call: Call, response: Response) {
-            response.body?.string()?.let { jsonString ->
-                try {
-                    val jsonObject: JsonObject = JsonParser.parseString(jsonString).asJsonObject
-                    val price = jsonObject["price"].asString
-                    val timestamp = System.currentTimeMillis()
-                    val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-                    val formattedTime = sdf.format(Date(timestamp))
-
-                    currentPriceState.value = "$price USDT"
-                    lastUpdateTimeState.value = formattedTime
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    currentPriceState.value = "Error parsing price"
-                    lastUpdateTimeState.value = "N/A"
-                }
-            }
-        }
-    })
 }

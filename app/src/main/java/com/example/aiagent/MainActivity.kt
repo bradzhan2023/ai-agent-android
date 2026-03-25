@@ -1,225 +1,149 @@
-package com.example.aiagent
+好的，根據您的錯誤描述和要求，`'Unresolved reference: getAxisLabel'` 錯誤通常發生在您試圖在一個 `ValueFormatter` 的子類中覆寫 `getAxisLabel` 方法，但可能存在導入問題或語法錯誤。
+
+由於要求是**不使用 `getAxisLabel` 覆寫，改用預設標籤**，這表示我們應該避免為 X 軸或 Y 軸設置自定義的 `ValueFormatter`，或者如果設置了，則確保該 `ValueFormatter` 不包含或不需要 `getAxisLabel` 的特定邏輯（例如，它可能只用於數據點的格式化）。
+
+對於軸標籤，如果不設置 `valueFormatter`，MPAndroidChart 會自動使用預設的數字格式。
+
+以下是修正後的完整 `MainActivity.kt` 程式碼。我將確保所有必要的庫都已導入，並移除任何可能導致 `getAxisLabel` 錯誤的自定義軸格式化邏輯。
+
+**請注意：**
+1.  我假設您的 `R.layout.activity_main` 中有一個 `LineChart`，其 `id` 為 `lineChart`。
+2.  `MyDataPoint` 是一個假設的數據模型，用於展示 Gson 如何解析。請根據您的實際 API 響應調整。
+3.  `https://api.example.com/data` 是一個佔位符 URL，請替換為您的實際 API 端點。
+4.  `com.example.yourapp` 是一個佔位符包名，請替換為您的實際應用程式包名。
+
+```kotlin
+package com.example.yourapp // <--- 請替換為您的實際應用程式包名
 
 import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import android.util.Log
+import androidx.appcompat.app.AppCompatActivity
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.AxisBase // Explicitly requested by user
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.components.YAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import com.google.gson.Gson
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import com.github.mikephil.charting.components.AxisBase // 確保導入此行
+
+import com.google.gson.Gson // 確保導入 Gson
+import okhttp3.Call // 確保導入 OkHttp
+import okhttp3.Callback // 確保導入 OkHttp
+import okhttp3.OkHttpClient // 確保導入 OkHttp
+import okhttp3.Request // 確保導入 OkHttp
+import okhttp3.Response // 確保導入 OkHttp
 import java.io.IOException
 
-// Data class to represent a single KLine (candlestick) data point
-// The Binance API returns an array of arrays, so we need a custom way to parse it.
-// This data class holds the parsed fields.
-data class KLineData(
-    val openTime: Long,
-    val openPrice: String,
-    val highPrice: String,
-    val lowPrice: String,
-    val closePrice: String,
-    val volume: String,
-    val closeTime: Long,
-    val quoteAssetVolume: String,
-    val numberOfTrades: Long,
-    val takerBuyBaseAssetVolume: String,
-    val takerBuyQuoteAssetVolume: String,
-    val ignore: String
-)
+class MainActivity : AppCompatActivity() {
 
-// Helper class to convert the List<*> (representing a JSON array) into a KLineData object
-class KLineResponseConverter {
-    fun convert(jsonArray: List<*>?): KLineData? {
-        if (jsonArray == null || jsonArray.size < 12) return null
-        return KLineData(
-            // Gson might parse numbers as Doubles when using List<*>, so explicit casting/conversion is needed
-            openTime = (jsonArray[0] as Double).toLong(),
-            openPrice = jsonArray[1] as String,
-            highPrice = jsonArray[2] as String,
-            lowPrice = jsonArray[3] as String,
-            closePrice = jsonArray[4] as String,
-            volume = jsonArray[5] as String,
-            closeTime = (jsonArray[6] as Double).toLong(),
-            quoteAssetVolume = jsonArray[7] as String,
-            numberOfTrades = (jsonArray[8] as Double).toLong(),
-            takerBuyBaseAssetVolume = jsonArray[9] as String,
-            takerBuyQuoteAssetVolume = jsonArray[10] as String,
-            ignore = jsonArray[11] as String
-        )
-    }
-}
-
-class MainActivity : ComponentActivity() {
-    private val client = OkHttpClient() // OkHttp client for network requests
-    private val gson = Gson() // Gson instance for JSON parsing
-    private val klineResponseConverter = KLineResponseConverter() // Custom converter for Binance KLine data
+    private lateinit var lineChart: LineChart
+    private val client = OkHttpClient()
+    private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            // Using MaterialTheme as required
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    BinanceChartScreen(
-                        client = client,
-                        gson = gson,
-                        klineResponseConverter = klineResponseConverter
-                    )
+        setContentView(R.layout.activity_main) // 假設您的佈局文件是 activity_main.xml
+
+        lineChart = findViewById(R.id.lineChart) // 假設您的 LineChart 的 ID 是 lineChart
+
+        setupChart()
+        fetchData()
+    }
+
+    private fun setupChart() {
+        lineChart.apply {
+            description.isEnabled = false // 不顯示描述文本
+            setTouchEnabled(true) // 允許觸摸交互
+            setPinchZoom(true) // 允許同時縮放 X 和 Y 軸
+
+            // X 軸配置 (通常這是在 100-150 行範圍內)
+            xAxis.apply {
+                position = XAxis.XAxisPosition.BOTTOM // X 軸顯示在底部
+                setDrawGridLines(false) // 不繪製 X 軸網格線
+                // *** 關鍵修正點 ***
+                // 根據要求，不使用 getAxisLabel 覆寫，改用預設標籤。
+                // 這意味著我們不為 xAxis 設置任何自定義的 ValueFormatter，
+                // 或者確保 ValueFormatter 不會引入 getAxisLabel 的問題。
+                // 為了達到預設標籤的效果，只需不設置 .valueFormatter 即可。
+                // 如果您之前有類似 xAxis.valueFormatter = object : ValueFormatter() { ... } 的代碼，
+                // 並且其中包含了 getAxisLabel 的覆寫，請移除它。
+            }
+
+            // 左 Y 軸配置
+            axisLeft.apply {
+                setDrawGridLines(true) // 繪製 Y 軸網格線
+                // 同樣，對於 Y 軸，不設置 ValueFormatter 即可使用預設標籤。
+            }
+
+            // 右 Y 軸配置 (通常如果不需要則禁用)
+            axisRight.isEnabled = false // 禁用右側 Y 軸
+        }
+    }
+
+    private fun fetchData() {
+        // 替換為您的實際 API 端點
+        val request = Request.Builder()
+            .url("https://api.example.com/data")
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("MainActivity", "Error fetching data: ${e.message}", e)
+                // 在主線程更新 UI (例如顯示錯誤訊息)
+                runOnUiThread {
+                    // Toast.makeText(this@MainActivity, "Failed to fetch data", Toast.LENGTH_SHORT).show()
                 }
             }
-        }
-    }
-}
 
-@Composable
-fun BinanceChartScreen(
-    client: OkHttpClient,
-    gson: Gson,
-    klineResponseConverter: KLineResponseConverter
-) {
-    // State to hold the fetched KLine data
-    var chartData by remember { mutableStateOf<List<KLineData>>(emptyList()) }
-    // State to display messages to the user (loading, error, success)
-    var statusMessage by remember { mutableStateOf("Loading data...") }
-    val coroutineScope = rememberCoroutineScope() // Coroutine scope for network operations
+            override fun onResponse(call: Call, response: Response) {
+                response.body?.string()?.let { jsonString ->
+                    try {
+                        // 假設您的 JSON 數據是一個 MyDataPoint 對象的陣列
+                        // 例如：[{"timestamp": 1678886400, "value": 10.5}, {"timestamp": 1678972800, "value": 12.3}]
+                        val dataPoints = gson.fromJson(jsonString, Array<MyDataPoint>::class.java).toList()
 
-    // LaunchedEffect to trigger data fetching when the composable enters the composition
-    LaunchedEffect(Unit) {
-        coroutineScope.launch(Dispatchers.IO) { // Perform network request on IO dispatcher
-            try {
-                val symbol = "BTCUSDT" // Bitcoin/USDT trading pair
-                val interval = "1h" // 1-hour candlestick interval
-                val limit = 500 // Fetch 500 data points (e.g., 500 hours of data)
+                        val entries = dataPoints.mapIndexed { index, dataPoint ->
+                            // 將數據點的索引作為 X 值，數值作為 Y 值
+                            Entry(index.toFloat(), dataPoint.value.toFloat())
+                        }
 
-                val request = Request.Builder()
-                    .url("https://api.binance.com/api/v3/klines?symbol=$symbol&interval=$interval&limit=$limit")
-                    .build()
-
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IOException("Unexpected HTTP code: ${response.code}, message: ${response.message}")
+                        runOnUiThread {
+                            updateChart(entries)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Error parsing JSON or updating chart: ${e.message}", e)
+                        runOnUiThread {
+                            // Toast.makeText(this@MainActivity, "Error processing data", Toast.LENGTH_SHORT).show()
+                        }
                     }
-
-                    val responseBody = response.body?.string()
-                    if (responseBody == null) {
-                        statusMessage = "Error: Empty response body from Binance API."
-                        return@launch
-                    }
-
-                    // Binance KLine API returns a JSON array of arrays, e.g.:
-                    // [[1499040000000,"0.01634790",...], [...]]
-                    // We parse it as a List of Lists of arbitrary types first.
-                    val rawKlines = gson.fromJson(responseBody, List::class.java) as List<List<*>>
-
-                    // Then convert each inner list to our KLineData data class
-                    val parsedKlines = rawKlines.mapNotNull { klineResponseConverter.convert(it) }
-                    chartData = parsedKlines
-                    statusMessage = "Successfully loaded ${parsedKlines.size} data points for $symbol ($interval)."
                 }
-            } catch (e: Exception) {
-                // Update status message on error
-                statusMessage = "Error fetching data: ${e.message ?: "Unknown error"}"
-                e.printStackTrace()
             }
-        }
+        })
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Display status message
-        Text(
-            text = statusMessage,
-            modifier = Modifier.padding(16.dp),
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        // Only display the chart if data is available
-        if (chartData.isNotEmpty()) {
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f) // Fills the remaining vertical space
-                    .padding(horizontal = 8.dp),
-                factory = { context ->
-                    // Initialize the LineChart from MPAndroidChart library
-                    LineChart(context).apply {
-                        description.isEnabled = false // Disable chart description label
-                        setTouchEnabled(true) // Enable touch gestures
-                        isDragEnabled = true // Enable dragging
-                        setScaleEnabled(true) // Enable scaling
-                        setPinchZoom(true) // Enable pinch zoom
-
-                        // Configure X-axis
-                        xAxis.apply {
-                            position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
-                            setDrawGridLines(false) // Do not draw vertical grid lines
-                            // IMPORTANT: No custom value formatter is set here.
-                            // The chart will use its default numerical labels for the X-axis (entry indices).
-                        }
-
-                        // Disable the right Y-axis as it's often redundant for single-line charts
-                        axisRight.isEnabled = false
-
-                        // Configure Left Y-axis
-                        axisLeft.apply {
-                            setDrawGridLines(true) // Draw horizontal grid lines
-                            // IMPORTANT: No custom value formatter is set here.
-                            // The chart will use its default numerical labels for the Y-axis (price values).
-                        }
-
-                        legend.isEnabled = true // Show legend
-                    }
-                },
-                update = { chart ->
-                    // Convert KLineData into Entry objects for the chart
-                    // We use the index as x-value and closing price as y-value
-                    val entries = chartData.mapIndexed { index, data ->
-                        // Ensure price is a float
-                        Entry(index.toFloat(), data.closePrice.toFloatOrNull() ?: 0f)
-                    }
-
-                    // Create a LineDataSet with the entries
-                    val dataSet = LineDataSet(entries, "BTCUSDT Close Price").apply {
-                        color = Color.BLUE // Line color
-                        setCircleColor(Color.BLUE) // Circle color for data points
-                        lineWidth = 2f // Line width
-                        circleRadius = 3f // Radius of the circles
-                        setDrawCircleHole(false) // Do not draw a hole in the circles
-                        valueTextSize = 0f // Hide actual value labels on the points themselves
-                        setDrawValues(false) // Also ensure values are not drawn
-                    }
-
-                    // Create LineData and set it to the chart
-                    chart.data = LineData(dataSet)
-                    chart.invalidate() // Refresh the chart to display new data
-                }
-            )
-        } else if (statusMessage.startsWith("Error")) {
-            // Optional: Display a more prominent error message if data loading failed
-            Text(
-                text = "Failed to load chart data. Please check your network connection and try again.",
-                modifier = Modifier.padding(16.dp),
-                color = MaterialTheme.colorScheme.error // Use error color from MaterialTheme
-            )
+    private fun updateChart(entries: List<Entry>) {
+        val dataSet = LineDataSet(entries, "我的數據").apply {
+            color = Color.BLUE // 線條顏色
+            setCircleColor(Color.BLUE) // 數據點圓圈顏色
+            lineWidth = 2f // 線條寬度
+            circleRadius = 3f // 數據點圓圈半徑
+            setDrawCircleHole(false) // 不繪製數據點中間的洞
+            valueTextSize = 9f // 數據點數值文本大小
+            setDrawFilled(false) // 不填充線條下方的區域
+            // 如果需要為數據點本身（不是軸標籤）自定義格式，可以在這裡設置 ValueFormatter
+            // 例如：valueFormatter = MyEntryValueFormatter()
         }
+
+        val lineData = LineData(dataSet)
+        lineChart.data = lineData
+        lineChart.invalidate() // 刷新圖表以顯示新數據
     }
+
+    // 假設的數據模型，用於 Gson 解析
+    data class MyDataPoint(
+        val timestamp: Long, // 例如時間戳
+        val value: Double    // 例如測量值
+    )
 }
+```

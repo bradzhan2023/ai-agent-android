@@ -61,12 +61,10 @@ def call_gemini_api(prompt, model_id, api_ver):
 # ================= GitHub Actions 監控邏輯 =================
 
 def wait_for_github_action_result():
-    """監控最近一次 GitHub Action 的狀態並在失敗時抓取 Log"""
     api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/actions/runs"
     
-    # 輪詢等待 Action 開始並結束
-    for _ in range(30): # 最多等待 5 分鐘 (10s * 30)
-        time.sleep(10)
+    for _ in range(30):
+        time.sleep(15) # 增加等待時間，Android 編譯較慢
         try:
             resp = requests.get(api_url, headers=GITHUB_API_HEADERS)
             runs = resp.json().get("workflow_runs", [])
@@ -80,15 +78,22 @@ def wait_for_github_action_result():
                 if conclusion == "success":
                     return "success", ""
                 else:
-                    # 抓取失敗的 Job Log (簡化版：抓取最近一個失敗 Job 的 URL)
+                    # 【核心改進】：抓取 Jobs 的錯誤訊息
                     jobs_url = latest_run.get("jobs_url")
-                    jobs_resp = requests.get(jobs_url, headers=GITHUB_API_HEADERS)
-                    # 這裡為了簡單，我們回傳結論，進階版可以下載 log zip
-                    return "failure", "Build failed on GitHub Actions. Please check Gradle dependencies or Kotlin syntax."
+                    jobs_resp = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
+                    job_info = jobs_resp.get("jobs", [{}])[0]
+                    
+                    # 嘗試從步驟中找出失敗的那一步
+                    failed_step = next((s for s in job_info.get("steps", []) if s['conclusion'] == 'failure'), {})
+                    error_context = f"Step '{failed_step.get('name')}' failed."
+                    
+                    # 💡 提示：如果想更強，可以加入下載 Log 的邏輯
+                    # 但目前我們先給予更明確的導向，讓 AI 知道是 'Build with Gradle' 這一步掛掉
+                    return "failure", f"GitHub Action 失敗於步驟: {error_context}。通常是 MainActivity.kt 第 100-150 行之間的語法或 Import 錯誤。"
             
             print(f"   [Action 狀態: {status}...]")
         except Exception as e:
-            print(f"⚠️ 檢查狀態時發生錯誤: {e}")
+            print(f"⚠️ 檢查狀態時錯誤: {e}")
             
     return "timeout", "Wait timeout"
 

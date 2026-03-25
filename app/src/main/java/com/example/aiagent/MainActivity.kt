@@ -1,427 +1,225 @@
-好的，這個問題通常發生在 `build.gradle` 檔案中，缺少或引用了錯誤版本的函式庫。同時，由於網路請求和 JSON 解析涉及非同步操作，我們需要使用 Kotlin Coroutines 來管理這些操作，並在主執行緒上更新 UI。
-
-以下是修正後的 `build.gradle` (Module: app) 配置、`settings.gradle` 配置、`AndroidManifest.xml` 以及完整的 `MainActivity.kt` 檔案。
-
----
-
-### 1. `settings.gradle` (Project Settings)
-
-**請確保你的 `settings.gradle` 檔案包含 JitPack 倉庫，因為 `MPAndroidChart` 函式庫通常從那裡獲取。**
-
-```gradle
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' } // <<< 確保有這一行
-    }
-}
-rootProject.name = "GoldTrackerApp" // 你的專案名稱
-include ':app'
-```
-
----
-
-### 2. `build.gradle` (Module: app)
-
-**這是最重要的部分，確保所有依賴都正確且版本兼容。**
-
-```gradle
-plugins {
-    id 'com.android.application'
-    id 'org.jetbrains.kotlin.android' // Kotlin plugin
-}
-
-android {
-    namespace 'com.example.goldtrackerapp' // 替換成你的專案包名
-    compileSdk 34 // 建議使用最新版本
-
-    defaultConfig {
-        applicationId 'com.example.goldtrackerapp' // 替換成你的專案包名
-        minSdk 24 // 根據你的目標設備選擇
-        targetSdk 34 // 建議使用最新版本
-        versionCode 1
-        versionName "1.0"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
-    kotlinOptions {
-        jvmTarget = '1.8'
-    }
-    // 啟用 View Binding
-    buildFeatures {
-        viewBinding true
-    }
-}
-
-dependencies {
-
-    // AndroidX Core & UI
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.10.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-
-    // Kotlin Coroutines (用於非同步操作)
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
-
-    // OkHttp (網路請求)
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0' // 建議使用最新穩定版
-
-    // Gson (JSON 解析)
-    implementation 'com.google.code.gson:gson:2.10.1' // 建議使用最新穩定版
-
-    // MPAndroidChart (圖表庫)
-    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0' // 目前最常用穩定版
-
-    // 測試相關
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-}
-
-```
-
----
-
-### 3. `AndroidManifest.xml`
-
-**確保你的應用程式有網路權限。**
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
-    <!-- 必須要有網路權限 -->
-    <uses-permission android:name="android.permission.INTERNET" />
-
-    <application
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.GoldTrackerApp"
-        tools:targetApi="31">
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-
-</manifest>
-```
-
----
-
-### 4. `activity_main.xml` (Layout)
-
-**定義 UI 佈局，包含一個 TextView 顯示價格和一個 LineChart 顯示走勢。**
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    tools:context=".MainActivity">
-
-    <TextView
-        android:id="@+id/priceTextView"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Loading PAXGUSDT price..."
-        android:textSize="24sp"
-        android:textStyle="bold"
-        android:padding="16dp"
-        app:layout_constraintBottom_toTopOf="@+id/chart"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_chainStyle="packed" />
-
-    <com.github.mikephil.charting.charts.LineChart
-        android:id="@+id/chart"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:layout_marginStart="8dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginEnd="8dp"
-        android:layout_marginBottom="8dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/priceTextView" />
-
-</androidx.constraintlayout.widget.ConstraintLayout>
-```
-
----
-
-### 5. `MainActivity.kt` (Kotlin Code)
-
-**完整的 `MainActivity` 程式碼，包含了網路請求、JSON 解析和圖表繪製。**
-
-```kotlin
-package com.example.goldtrackerapp
+package com.example.aiagent
 
 import android.graphics.Color
 import android.os.Bundle
-import android.util.Log
-import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
-import com.example.goldtrackerapp.databinding.ActivityMainBinding
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.AxisBase // Explicitly requested by user
 import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.components.YAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import com.github.mikephil.charting.formatter.ValueFormatter
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
 
-class MainActivity : AppCompatActivity() {
+// Data class to represent a single KLine (candlestick) data point
+// The Binance API returns an array of arrays, so we need a custom way to parse it.
+// This data class holds the parsed fields.
+data class KLineData(
+    val openTime: Long,
+    val openPrice: String,
+    val highPrice: String,
+    val lowPrice: String,
+    val closePrice: String,
+    val volume: String,
+    val closeTime: Long,
+    val quoteAssetVolume: String,
+    val numberOfTrades: Long,
+    val takerBuyBaseAssetVolume: String,
+    val takerBuyQuoteAssetVolume: String,
+    val ignore: String
+)
 
-    private lateinit var binding: ActivityMainBinding
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .build()
-    private val gson = Gson()
+// Helper class to convert the List<*> (representing a JSON array) into a KLineData object
+class KLineResponseConverter {
+    fun convert(jsonArray: List<*>?): KLineData? {
+        if (jsonArray == null || jsonArray.size < 12) return null
+        return KLineData(
+            // Gson might parse numbers as Doubles when using List<*>, so explicit casting/conversion is needed
+            openTime = (jsonArray[0] as Double).toLong(),
+            openPrice = jsonArray[1] as String,
+            highPrice = jsonArray[2] as String,
+            lowPrice = jsonArray[3] as String,
+            closePrice = jsonArray[4] as String,
+            volume = jsonArray[5] as String,
+            closeTime = (jsonArray[6] as Double).toLong(),
+            quoteAssetVolume = jsonArray[7] as String,
+            numberOfTrades = (jsonArray[8] as Double).toLong(),
+            takerBuyBaseAssetVolume = jsonArray[9] as String,
+            takerBuyQuoteAssetVolume = jsonArray[10] as String,
+            ignore = jsonArray[11] as String
+        )
+    }
+}
 
-    // Binance API Endpoint for current price
-    private val CURRENT_PRICE_URL = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
-    // Binance API Endpoint for 24-hour klines (candlestick data)
-    // interval=1h means 1-hour candles, limit=24 means 24 candles (24 hours)
-    private val KLINES_URL = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24"
+class MainActivity : ComponentActivity() {
+    private val client = OkHttpClient() // OkHttp client for network requests
+    private val gson = Gson() // Gson instance for JSON parsing
+    private val klineResponseConverter = KLineResponseConverter() // Custom converter for Binance KLine data
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        fetchBinanceData()
-    }
-
-    private fun fetchBinanceData() {
-        // 使用 lifecycleScope.launch 在背景執行緒 (IO) 執行網路請求
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                // 1. 抓取當前金價
-                val currentPriceRequest = Request.Builder().url(CURRENT_PRICE_URL).build()
-                val currentPriceResponse = client.newCall(currentPriceRequest).execute()
-
-                if (currentPriceResponse.isSuccessful) {
-                    val json = currentPriceResponse.body?.string()
-                    val priceData = gson.fromJson(json, BinancePriceResponse::class.java)
-                    val price = priceData.price.toFloatOrNull() // 轉換為浮點數
-
-                    withContext(Dispatchers.Main) {
-                        if (price != null) {
-                            binding.priceTextView.text = "PAXG/USDT: $%.2f".format(price)
-                        } else {
-                            binding.priceTextView.text = "無法獲取價格"
-                        }
-                    }
-                } else {
-                    Log.e("BinanceData", "Current price request failed: ${currentPriceResponse.code}")
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "無法獲取當前價格", Toast.LENGTH_SHORT).show()
-                    }
-                }
-
-                // 2. 抓取 24 小時 K 線數據
-                val klinesRequest = Request.Builder().url(KLINES_URL).build()
-                val klinesResponse = client.newCall(klinesRequest).execute()
-
-                if (klinesResponse.isSuccessful) {
-                    val json = klinesResponse.body?.string()
-                    // Binance Klines API 返回的是 List<List<String>>
-                    // [
-                    //   [
-                    //     1499040000000,      // Open time
-                    //     "0.01634790",       // Open
-                    //     "0.80000000",       // High
-                    //     "0.01575600",       // Low
-                    //     "0.01577000",       // Close (我們要用的)
-                    //     "148976.10700000",  // Volume
-                    //     1499644799999,      // Close time
-                    //     "2434.19055334",    // Quote asset volume
-                    //     308,                // Number of trades
-                    //     "1756.87400000",    // Taker buy base asset volume
-                    //     "28.46694368",      // Taker buy quote asset volume
-                    //     "17928899.62484339" // Ignore
-                    //   ]
-                    // ]
-                    val klinesList = gson.fromJson(json, Array<Array<Any>>::class.java)
-
-                    val chartEntries = klinesList.mapNotNull { kline ->
-                        val openTime = (kline[0] as Double).toLong() // Open time in milliseconds
-                        val closePrice = (kline[4] as String).toFloatOrNull() // Close price
-
-                        if (closePrice != null) {
-                            // X 軸使用時間戳 (以毫秒為單位)，Y 軸使用價格
-                            Entry(openTime.toFloat(), closePrice)
-                        } else {
-                            null
-                        }
-                    }
-
-                    withContext(Dispatchers.Main) {
-                        if (chartEntries.isNotEmpty()) {
-                            setupChart(chartEntries)
-                        } else {
-                            Toast.makeText(this@MainActivity, "沒有足夠的圖表數據", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                } else {
-                    Log.e("BinanceData", "Klines request failed: ${klinesResponse.code}")
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "無法獲取圖表數據", Toast.LENGTH_SHORT).show()
-                    }
-                }
-
-            } catch (e: IOException) {
-                Log.e("BinanceData", "Network error: ${e.message}")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "網路錯誤: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            } catch (e: Exception) {
-                Log.e("BinanceData", "Data parsing error: ${e.message}", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "數據處理錯誤: ${e.message}", Toast.LENGTH_LONG).show()
+        setContent {
+            // Using MaterialTheme as required
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    BinanceChartScreen(
+                        client = client,
+                        gson = gson,
+                        klineResponseConverter = klineResponseConverter
+                    )
                 }
             }
-        }
-    }
-
-    private fun setupChart(entries: List<Entry>) {
-        val dataSet = LineDataSet(entries, "PAXG/USDT 24小時走勢").apply {
-            color = Color.BLUE
-            setCircleColor(Color.BLUE)
-            valueTextColor = Color.BLACK
-            valueTextSize = 0f // 不顯示每個點的數值
-            lineWidth = 2f
-            circleRadius = 3f
-            setDrawCircleHole(false)
-            setDrawValues(false) // 不在圖表上繪製數據點的值
-            mode = LineDataSet.Mode.CUBIC_BEZIER // 平滑曲線
-            setDrawFilled(true) // 填充線下區域
-            fillColor = Color.parseColor("#80ADD8E6") // 淺藍色半透明填充
-        }
-
-        val lineData = LineData(dataSet)
-        binding.chart.apply {
-            data = lineData
-            description.isEnabled = false // 不顯示描述
-            legend.isEnabled = false // 不顯示圖例
-            setTouchEnabled(true)
-            isDragEnabled = true
-            setScaleEnabled(true)
-            setPinchZoom(true)
-            setNoDataText("沒有可用的圖表數據")
-            animateX(1500) // X軸動畫
-
-            // X 軸設定
-            xAxis.apply {
-                position = XAxis.XAxisPosition.BOTTOM
-                granularity = TimeUnit.HOURS.toMillis(3).toFloat() // 每3小時顯示一個標籤
-                valueFormatter = DateAxisFormatter() // 自定義日期時間格式化器
-                textColor = Color.BLACK
-                setDrawGridLines(false) // 不繪製網格線
-            }
-
-            // 左 Y 軸設定
-            axisLeft.apply {
-                textColor = Color.BLACK
-                setDrawGridLines(true) // 繪製網格線
-            }
-
-            // 右 Y 軸設定 (禁用)
-            axisRight.isEnabled = false
-
-            invalidate() // 刷新圖表
-        }
-    }
-
-    // JSON 數據模型 for current price
-    data class BinancePriceResponse(
-        @SerializedName("symbol") val symbol: String,
-        @SerializedName("price") val price: String
-    )
-
-    // 自定義 X 軸日期時間格式化器
-    private class DateAxisFormatter : ValueFormatter() {
-        private val mFormat = SimpleDateFormat("HH:mm", Locale.getDefault()) // 顯示小時:分鐘
-
-        override fun getFormattedValue(value: Float): String {
-            // value 是時間戳 (毫秒)，MPAndroidChart 的 Entry x 值是 float
-            return mFormat.format(Date(value.toLong()))
         }
     }
 }
-```
 
----
+@Composable
+fun BinanceChartScreen(
+    client: OkHttpClient,
+    gson: Gson,
+    klineResponseConverter: KLineResponseConverter
+) {
+    // State to hold the fetched KLine data
+    var chartData by remember { mutableStateOf<List<KLineData>>(emptyList()) }
+    // State to display messages to the user (loading, error, success)
+    var statusMessage by remember { mutableStateOf("Loading data...") }
+    val coroutineScope = rememberCoroutineScope() // Coroutine scope for network operations
 
-### 如何在 Android Studio 中操作：
+    // LaunchedEffect to trigger data fetching when the composable enters the composition
+    LaunchedEffect(Unit) {
+        coroutineScope.launch(Dispatchers.IO) { // Perform network request on IO dispatcher
+            try {
+                val symbol = "BTCUSDT" // Bitcoin/USDT trading pair
+                val interval = "1h" // 1-hour candlestick interval
+                val limit = 500 // Fetch 500 data points (e.g., 500 hours of data)
 
-1.  **更新 `settings.gradle`：**
-    *   在 Android Studio 的 Project Explorer (左側導航欄) 中，找到 `Gradle Scripts` -> `settings.gradle (Project Settings)`。
-    *   確保 `maven { url 'https://jitpack.io' }` 存在於 `repositories` 區塊中。
+                val request = Request.Builder()
+                    .url("https://api.binance.com/api/v3/klines?symbol=$symbol&interval=$interval&limit=$limit")
+                    .build()
 
-2.  **更新 `build.gradle (Module: app)`：**
-    *   在 Android Studio 的 Project Explorer 中，找到 `Gradle Scripts` -> `build.gradle (Module: app)`。
-    *   將內容替換為上面提供的程式碼。
-    *   `namespace` 和 `applicationId` 請替換為你專案的實際包名。
-    *   **點擊 "Sync Now"** (通常在修改 `build.gradle` 後會自動彈出，或手動點擊工具列上的大象圖標)。這會讓 Gradle 下載並配置所有新的函式庫。
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw IOException("Unexpected HTTP code: ${response.code}, message: ${response.message}")
+                    }
 
-3.  **更新 `AndroidManifest.xml`：**
-    *   在 Project Explorer 中，找到 `app` -> `manifests` -> `AndroidManifest.xml`。
-    *   確保 `uses-permission android:name="android.permission.INTERNET"` 存在於 `<manifest>` 標籤內，但位於 `<application>` 標籤之外。
+                    val responseBody = response.body?.string()
+                    if (responseBody == null) {
+                        statusMessage = "Error: Empty response body from Binance API."
+                        return@launch
+                    }
 
-4.  **更新 `activity_main.xml`：**
-    *   在 Project Explorer 中，找到 `app` -> `res` -> `layout` -> `activity_main.xml`。
-    *   將內容替換為上面提供的程式碼。
+                    // Binance KLine API returns a JSON array of arrays, e.g.:
+                    // [[1499040000000,"0.01634790",...], [...]]
+                    // We parse it as a List of Lists of arbitrary types first.
+                    val rawKlines = gson.fromJson(responseBody, List::class.java) as List<List<*>>
 
-5.  **替換 `MainActivity.kt`：**
-    *   在 Project Explorer 中，找到 `app` -> `java` -> 你的包名 (例如 `com.example.goldtrackerapp`) -> `MainActivity.kt`。
-    *   將內容替換為上面提供的程式碼。
+                    // Then convert each inner list to our KLineData data class
+                    val parsedKlines = rawKlines.mapNotNull { klineResponseConverter.convert(it) }
+                    chartData = parsedKlines
+                    statusMessage = "Successfully loaded ${parsedKlines.size} data points for $symbol ($interval)."
+                }
+            } catch (e: Exception) {
+                // Update status message on error
+                statusMessage = "Error fetching data: ${e.message ?: "Unknown error"}"
+                e.printStackTrace()
+            }
+        }
+    }
 
-6.  **執行應用程式：**
-    *   在模擬器或實體設備上執行應用程式。它應該能夠成功編譯並顯示 PAXG/USDT 的當前價格和 24 小時走勢圖。
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Display status message
+        Text(
+            text = statusMessage,
+            modifier = Modifier.padding(16.dp),
+            style = MaterialTheme.typography.headlineSmall
+        )
 
-這個方案解決了 GitHub Actions 上編譯失敗的常見原因（Gradle 依賴問題），並提供了完整的 Kotlin 程式碼實現所有要求。
+        // Only display the chart if data is available
+        if (chartData.isNotEmpty()) {
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f) // Fills the remaining vertical space
+                    .padding(horizontal = 8.dp),
+                factory = { context ->
+                    // Initialize the LineChart from MPAndroidChart library
+                    LineChart(context).apply {
+                        description.isEnabled = false // Disable chart description label
+                        setTouchEnabled(true) // Enable touch gestures
+                        isDragEnabled = true // Enable dragging
+                        setScaleEnabled(true) // Enable scaling
+                        setPinchZoom(true) // Enable pinch zoom
+
+                        // Configure X-axis
+                        xAxis.apply {
+                            position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
+                            setDrawGridLines(false) // Do not draw vertical grid lines
+                            // IMPORTANT: No custom value formatter is set here.
+                            // The chart will use its default numerical labels for the X-axis (entry indices).
+                        }
+
+                        // Disable the right Y-axis as it's often redundant for single-line charts
+                        axisRight.isEnabled = false
+
+                        // Configure Left Y-axis
+                        axisLeft.apply {
+                            setDrawGridLines(true) // Draw horizontal grid lines
+                            // IMPORTANT: No custom value formatter is set here.
+                            // The chart will use its default numerical labels for the Y-axis (price values).
+                        }
+
+                        legend.isEnabled = true // Show legend
+                    }
+                },
+                update = { chart ->
+                    // Convert KLineData into Entry objects for the chart
+                    // We use the index as x-value and closing price as y-value
+                    val entries = chartData.mapIndexed { index, data ->
+                        // Ensure price is a float
+                        Entry(index.toFloat(), data.closePrice.toFloatOrNull() ?: 0f)
+                    }
+
+                    // Create a LineDataSet with the entries
+                    val dataSet = LineDataSet(entries, "BTCUSDT Close Price").apply {
+                        color = Color.BLUE // Line color
+                        setCircleColor(Color.BLUE) // Circle color for data points
+                        lineWidth = 2f // Line width
+                        circleRadius = 3f // Radius of the circles
+                        setDrawCircleHole(false) // Do not draw a hole in the circles
+                        valueTextSize = 0f // Hide actual value labels on the points themselves
+                        setDrawValues(false) // Also ensure values are not drawn
+                    }
+
+                    // Create LineData and set it to the chart
+                    chart.data = LineData(dataSet)
+                    chart.invalidate() // Refresh the chart to display new data
+                }
+            )
+        } else if (statusMessage.startsWith("Error")) {
+            // Optional: Display a more prominent error message if data loading failed
+            Text(
+                text = "Failed to load chart data. Please check your network connection and try again.",
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.error // Use error color from MaterialTheme
+            )
+        }
+    }
+}

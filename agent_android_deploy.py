@@ -2,6 +2,7 @@ import os
 import sys
 import requests
 import json
+import time
 from git import Repo
 
 # ================= 配置區域 =================
@@ -27,6 +28,10 @@ if not GEMINI_API_KEY or not GITHUB_TOKEN:
     exit(1)
 
 GITHUB_REPO_URL = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_USER}/{GITHUB_REPO}.git"
+GITHUB_API_HEADERS = {
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github.v3+json"
+}
 
 # ================= 核心 API 函數 =================
 
@@ -52,6 +57,40 @@ def call_gemini_api(prompt, model_id, api_ver):
         return res_json['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
         raise Exception(f"API 請求失敗: {str(e)}")
+
+# ================= GitHub Actions 監控邏輯 =================
+
+def wait_for_github_action_result():
+    """監控最近一次 GitHub Action 的狀態並在失敗時抓取 Log"""
+    api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/actions/runs"
+    
+    # 輪詢等待 Action 開始並結束
+    for _ in range(30): # 最多等待 5 分鐘 (10s * 30)
+        time.sleep(10)
+        try:
+            resp = requests.get(api_url, headers=GITHUB_API_HEADERS)
+            runs = resp.json().get("workflow_runs", [])
+            if not runs: continue
+            
+            latest_run = runs[0]
+            status = latest_run.get("status")
+            conclusion = latest_run.get("conclusion")
+            
+            if status == "completed":
+                if conclusion == "success":
+                    return "success", ""
+                else:
+                    # 抓取失敗的 Job Log (簡化版：抓取最近一個失敗 Job 的 URL)
+                    jobs_url = latest_run.get("jobs_url")
+                    jobs_resp = requests.get(jobs_url, headers=GITHUB_API_HEADERS)
+                    # 這裡為了簡單，我們回傳結論，進階版可以下載 log zip
+                    return "failure", "Build failed on GitHub Actions. Please check Gradle dependencies or Kotlin syntax."
+            
+            print(f"   [Action 狀態: {status}...]")
+        except Exception as e:
+            print(f"⚠️ 檢查狀態時發生錯誤: {e}")
+            
+    return "timeout", "Wait timeout"
 
 # ================= 專案環境初始化 =================
 
@@ -121,7 +160,7 @@ dependencies {{
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.foundation:foundation'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    implementation 'com.google.code.gson:gson:2.10.1' // 關鍵：補上 Gson 依賴
+    implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
     implementation 'androidx.multidex:multidex:2.0.1'
@@ -163,7 +202,7 @@ jobs:
         with:
           gradle-version: 8.5
       - name: Build with Gradle
-        run: gradle assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -186,30 +225,75 @@ def developer_agent_android(task, model_id, api_ver):
     )
     return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
 
-def github_release_agent(task_name, app_code, readme_content):
-    print(f"🚀 同步至 GitHub...")
+def push_to_github(task_name, app_code):
+    print(f"🚀 同步代碼至 GitHub...")
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(app_code)
-    with open(README_FILE, "w", encoding="utf-8") as f: f.write(readme_content)
     try:
         repo = Repo(".")
+        # 確保有 git init
+        if not os.path.exists(".git"): repo = Repo.init(".")
+        
         repo.git.add(A=True)
-        repo.index.commit(f"Fix Missing Dependencies: {task_name}")
-        repo.git.push(GITHUB_REPO_URL, 'main')
-        print(f"✅ 完成！")
+        repo.index.commit(f"Update Android Code: {task_name}")
+        repo.git.push(GITHUB_REPO_URL, 'main', force=True)
+        print(f"✅ 推送成功")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
+
+# ================= 自動修復迴圈 =================
+
+def auto_fix_loop(task, model_id, api_ver, max_retries=3):
+    # 1. 第一次嘗試
+    print("🛠️ 正在生成初始代碼...")
+    code = developer_agent_android(task, model_id, api_ver)
+    push_to_github(task, code)
+    
+    for i in range(max_retries):
+        print(f"🔄 正在等待 GitHub Actions 編譯結果 (第 {i+1}/{max_retries} 次嘗試)...")
+        status, log = wait_for_github_action_result()
+        
+        if status == "success":
+            print("✨ [SUCCESS] 編譯成功！APK 已生成。")
+            return True
+        
+        print(f"❌ [FAILURE] 編譯失敗，正在請求 Gemini 修復...")
+        
+        # 2. 讓 Gemini 分析（可以加入更詳細的 Prompt）
+        fix_prompt = (
+            f"原 Android 任務：{task}\n"
+            f"編譯錯誤描述：{log}\n"
+            f"請修正錯誤，確保所有庫（Gson, OkHttp）都正確導入，並重新提供完整的 MainActivity.kt。"
+        )
+        code = call_gemini_api(fix_prompt, model_id, api_ver)
+        
+        # 3. 再次推送
+        push_to_github(f"Auto-fix Attempt {i+1}", code)
+        
+    print("🛑 已達到最大重試次數，任務失敗。")
+    return False
+
+# ================= 主程式 =================
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("💡 Usage: python3 agent_android_deploy.py \"任務\"")
         exit(1)
+        
     my_task = sys.argv[1]
     initialize_android_project()
+    
     try:
         model_id, api_ver = get_available_model()
-        clean_code = developer_agent_android(my_task, model_id, api_ver)
-        doc_prompt = f"撰寫 README.md: {my_task}"
-        readme_md = call_gemini_api(doc_prompt, model_id, api_ver)
-        github_release_agent(my_task, clean_code, readme_md)
+        
+        # 執行自動修復迴圈
+        success = auto_fix_loop(my_task, model_id, api_ver)
+        
+        if success:
+            # 成功後更新 README
+            doc_prompt = f"為這個 Android 專案撰寫 README.md: {my_task}"
+            readme_md = call_gemini_api(doc_prompt, model_id, api_ver)
+            with open(README_FILE, "w", encoding="utf-8") as f: f.write(readme_md)
+            print("📝 README 已更新")
+            
     except Exception as e:
-        print(f"💥 錯誤: {e}")
+        print(f"💥 程式執行出錯: {e}")

@@ -1,436 +1,568 @@
-根據您提供的編譯器錯誤日誌，問題主要集中在以下幾點：
+您好！根據您提供的錯誤日誌，問題非常明確：`implementation`、`debugImplementation`、`repositoriesMode`、`repositories` 等關鍵字是 **Gradle 建置系統**的配置語法，它們應該被放置在 `build.gradle.kts` 或 `settings.gradle.kts` 這些 Gradle 設定檔中，而不是在 `MainActivity.kt` 這樣的 Kotlin 應用程式邏輯程式碼中。
 
-1.  **檔案開頭結構問題 (`Expecting a top level declaration`, `imports are only allowed in the beginning of file`)**: 這表示 `MainActivity.kt` 檔案的開頭可能不是以 `package` 宣告開始，或者在 `package` 和 `import` 之間有其他不應該出現的內容。Kotlin 檔案必須以 `package` 宣告開始，緊接著是所有 `import` 語句，然後才是其他頂層宣告（如 `class` 或 `fun`）。
-2.  **未解析的引用 (`Unresolved reference: tooling`, `Unresolved reference: Preview`)**: 這表示 `@Preview` 註解或與其相關的 `tooling` 引用沒有正確的 `import` 語句。在 Jetpack Compose 中，這通常是由於缺少 `import androidx.compose.ui.tooling.preview.Preview`。
+您看到的 `Unresolved reference` 錯誤，正是因為 Kotlin 編譯器不認識這些 Gradle 語法，所以無法解析它們。
 
-以下是修復後的 `MainActivity.kt` 程式碼，它解決了上述編譯錯誤，並實作了金價追蹤、數據解析和 24 小時走勢圖繪製的功能。同時，我也包含了 `build.gradle (Module: app)` 和 `AndroidManifest.xml` 中可能需要的依賴項和權限作為參考，因為這些是實現功能所必需的，但錯誤日誌中沒有直接顯示其問題。
+要修復此問題，我們需要做的是：
+1.  從 `MainActivity.kt` 中移除所有錯誤的 Gradle 配置語法。
+2.  在正確的 Gradle 設定檔 (`app/build.gradle.kts` 和 `settings.gradle.kts`) 中添加必要的依賴庫和倉庫配置。
+3.  提供完整的 `MainActivity.kt` 程式碼，實現金價追蹤的邏輯（抓取數據、解析、顯示、繪圖）。
+4.  確保 `AndroidManifest.xml` 包含網路權限。
+
+以下是詳細的修復步驟和程式碼：
 
 ---
 
-**`app/src/main/java/com/example/aiagent/MainActivity.kt`**
+### 1. 錯誤分析與修正方向
+
+錯誤日誌顯示 `MainActivity.kt` 的第 385 行到 419 行出現大量 `Unresolved reference` 錯誤，這些錯誤指向 `implementation`、`debugImplementation`、`repositoriesMode`、`RepositoriesMode`、`repositories`、`google`、`mavenCentral`、`maven`、`url` 等。
+
+這清楚表明這些行是嘗試在 Kotlin 程式碼中直接配置 Gradle 依賴和倉庫。這是錯誤的做法。`MainActivity.kt` 應該只包含 Android 應用程式的 Kotlin 程式碼。
+
+**修正方法**：將這些 Gradle 語法從 `MainActivity.kt` 中刪除，並將其正確地放置到 `app/build.gradle.kts`（用於依賴庫）和 `settings.gradle.kts`（用於倉庫）中。
+
+---
+
+### 2. `MainActivity.kt` 的完整修正程式碼
+
+這個程式碼將包含實現金價追蹤（PAXG/USDT）的邏輯：
+*   使用 OkHttp 抓取 Binance API 數據。
+*   使用 Gson 解析 JSON 響應。
+*   在 Compose UI 中顯示當前價格。
+*   使用 MPAndroidChart 繪製 24 小時價格走勢圖。
 
 ```kotlin
-// 這是檔案的第一行，必須是 package 宣告
 package com.example.aiagent
 
-import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.tooling.preview.Preview // 修正: Unresolved reference: Preview
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.lifecycleScope
-import com.example.aiagent.ui.theme.AiagentTheme // 假設你的專案主題檔案位於此處
+import androidx.compose.ui.viewinterop.AndroidView // 用于在Compose中嵌入传统View
+
+import com.example.aiagent.ui.theme.AiAgentTheme
+
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.AxisBase
-import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
+import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.components.YAxis
 import com.github.mikephil.charting.formatter.ValueFormatter
+import com.github.mikephil.charting.animation.Easing
+
+import okhttp3.*
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
-import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import kotlinx.coroutines.*
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
+
+// =====================================
+// Data Models for Binance API Responses
+// =====================================
+
+// For https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT
+data class TickerPriceResponse(
+    val symbol: String,
+    val price: String
+)
+
+// For https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24
+// Binance Klines API returns an array of arrays. Each inner array is a candlestick:
+// [
+//   [
+//     1499040000000,      // Open time (milliseconds)
+//     "0.01634790",       // Open price
+//     "0.80000000",       // High price
+//     "0.01575800",       // Low price
+//     "0.01577100",       // Close price
+//     "148976.10700000",  // Volume
+//     1499644799999,      // Close time (milliseconds)
+//     "2434.19023972",    // Quote asset volume
+//     308,                // Number of trades
+//     "1756.87400000",    // Taker buy base asset volume
+//     "28.46694368",      // Taker buy quote asset volume
+//     "1792.00000000"     // Ignore
+//   ]
+// ]
+// We need to parse this raw array into a structured data class.
+data class KlineData(
+    val openTime: Long,
+    val open: String,
+    val high: String,
+    val low: String,
+    val close: String,
+    val volume: String,
+    val closeTime: Long,
+    val quoteAssetVolume: String,
+    val numberOfTrades: Int,
+    val takerBuyBaseAssetVolume: String,
+    val takerBuyQuoteAssetVolume: String,
+    val ignore: String
+) {
+    companion object {
+        // Helper function to parse the raw List<Any> from Gson into KlineData
+        fun fromJsonArray(jsonArray: List<Any>): KlineData {
+            return KlineData(
+                openTime = (jsonArray[0] as Double).toLong(), // Gson parses numbers as Double by default
+                open = jsonArray[1] as String,
+                high = jsonArray[2] as String,
+                low = jsonArray[3] as String,
+                close = jsonArray[4] as String,
+                volume = jsonArray[5] as String,
+                closeTime = (jsonArray[6] as Double).toLong(),
+                quoteAssetVolume = jsonArray[7] as String,
+                numberOfTrades = (jsonArray[8] as Double).toInt(),
+                takerBuyBaseAssetVolume = jsonArray[9] as String,
+                takerBuyQuoteAssetVolume = jsonArray[10] as String,
+                ignore = jsonArray[11] as String
+            )
+        }
+    }
+}
+
+// =====================================
+// MainActivity - Entry point of the app
+// =====================================
 
 class MainActivity : ComponentActivity() {
+
+    // OkHttp client for network requests
+    private val client = OkHttpClient()
+    // Gson for JSON parsing
+    private val gson = Gson()
+    // Coroutine scope for background operations (fetching data)
+    private val coroutineScope = CoroutineScope(Dispatchers.IO)
+
+    // State holders for Compose UI, updated on the main thread
+    private val _currentPrice = mutableStateOf("Loading...")
+    // Using mutableStateOf for chart entries, so Compose recomposes when data changes
+    private val _chartEntries = mutableStateOf<List<Entry>>(emptyList())
+    // Store kline data to use timestamps for X-axis labels
+    private val _klineTimestamps = mutableStateOf<List<Long>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            AiagentTheme {
-                // 使用 'background' 顏色作為表面容器
+            AiAgentTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colors.background
+                    color = MaterialTheme.colorScheme.background
                 ) {
-                    PriceTrackerApp()
-                }
-            }
-        }
-    }
-}
-
-// Binance 24hr Ticker API 回應的數據模型
-data class TickerResponse(
-    @SerializedName("symbol") val symbol: String,
-    @SerializedName("priceChange") val priceChange: String,
-    @SerializedName("priceChangePercent") val priceChangePercent: String,
-    @SerializedName("weightedAvgPrice") val weightedAvgPrice: String,
-    @SerializedName("lastPrice") val lastPrice: String,
-    @SerializedName("lastQty") val lastQty: String,
-    @SerializedName("openPrice") val openPrice: String,
-    @SerializedName("highPrice") val highPrice: String,
-    @SerializedName("lowPrice") val lowPrice: String,
-    @SerializedName("volume") val volume: String,
-    @SerializedName("quoteVolume") val quoteVolume: String,
-    @SerializedName("openTime") val openTime: Long,
-    @SerializedName("closeTime") val closeTime: Long,
-    @SerializedName("firstId") val firstId: Long,
-    @SerializedName("lastId") val lastId: Long,
-    @SerializedName("count") val count: Int
-)
-
-// K線數據結構 (Binance API 返回一個陣列的陣列)
-// 範例:
-// [
-//   [
-//     1499040000000,      // 開盤時間 (毫秒)
-//     "0.01634790",       // 開盤價
-//     "0.80000000",       // 最高價
-//     "0.01575600",       // 最低價
-//     "0.01577100",       // 收盤價
-//     "148976.11427815",  // 交易量
-//     1499644799999,      // 收盤時間 (毫秒)
-//     "2434.19055334",    // 報價資產交易量
-//     308,                // 交易數量
-//     "1756.87492983",    // 買方基礎資產交易量
-//     "28.46694368",      // 買方報價資產交易量
-//     "1792.34212341"     // 忽略
-//   ]
-// ]
-data class Candlestick(
-    val openTime: Long,
-    val openPrice: Float,
-    val highPrice: Float,
-    val lowPrice: Float,
-    val closePrice: Float,
-    val volume: Float,
-    val closeTime: Long,
-    val quoteAssetVolume: Float,
-    val numberOfTrades: Int,
-    val takerBuyBaseAssetVolume: Float,
-    val takerBuyQuoteAssetVolume: Float,
-    val ignore: Float
-)
-
-// 擴展函數用於將原始列表解析為 Candlestick 物件
-fun List<Any>.toCandlestick(): Candlestick {
-    return Candlestick(
-        openTime = (this[0] as Double).toLong(), // Binance API 中的時間戳記可能以 Double 形式返回
-        openPrice = (this[1] as String).toFloat(),
-        highPrice = (this[2] as String).toFloat(),
-        lowPrice = (this[3] as String).toFloat(),
-        closePrice = (this[4] as String).toFloat(),
-        volume = (this[5] as String).toFloat(),
-        closeTime = (this[6] as Double).toLong(),
-        quoteAssetVolume = (this[7] as String).toFloat(),
-        numberOfTrades = (this[8] as Double).toInt(),
-        takerBuyBaseAssetVolume = (this[9] as String).toFloat(),
-        takerBuyQuoteAssetVolume = (this[10] as String).toFloat(),
-        ignore = (this[11] as String).toFloat()
-    )
-}
-
-@Composable
-fun PriceTrackerApp() {
-    val currentPrice = remember { mutableStateOf("載入中...") }
-    val priceChange24h = remember { mutableStateOf("載入中...") }
-    val priceChangePercent24h = remember { mutableStateOf("載入中...") }
-    val historicalData = remember { mutableStateOf<List<Entry>>(emptyList()) }
-    val isLoading = remember { mutableStateOf(false) }
-    val errorMessage = remember { mutableStateOf<String?>(null) }
-
-    val client = remember { OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build() }
-    val gson = remember { Gson() }
-
-    // 使用 LaunchedEffect 在 Composable 首次進入組合時抓取數據
-    LaunchedEffect(Unit) { // Unit 作為 key 確保它只運行一次
-        isLoading.value = true
-        errorMessage.value = null
-        launch(Dispatchers.IO) { // 在 IO 協程中執行網路請求
-            try {
-                // 1. 抓取當前價格 (24 小時行情數據)
-                val tickerRequest = Request.Builder()
-                    .url("https://api.binance.com/api/v3/ticker/24hr?symbol=PAXGUSDT")
-                    .build()
-                val tickerResponse = client.newCall(tickerRequest).execute()
-                val tickerJson = tickerResponse.body?.string()
-
-                if (tickerResponse.isSuccessful && tickerJson != null) {
-                    val ticker = gson.fromJson(tickerJson, TickerResponse::class.java)
-                    withContext(Dispatchers.Main) { // 切換回主線程更新 UI
-                        currentPrice.value = String.format(Locale.US, "%.2f USDT", ticker.lastPrice.toFloat())
-                        priceChange24h.value = String.format(Locale.US, "%.2f", ticker.priceChange.toFloat())
-                        priceChangePercent24h.value = String.format(Locale.US, "%.2f%%", ticker.priceChangePercent.toFloat())
-                    }
-                } else {
-                    val error = "抓取 Ticker 錯誤: ${tickerResponse.code} - ${tickerResponse.message}"
-                    Log.e("PriceTracker", error)
-                    withContext(Dispatchers.Main) { errorMessage.value = error }
-                }
-
-                // 2. 抓取 24 小時 K 線數據
-                // interval: 1m (1 分鐘), limit: 1440 (60 分鐘 * 24 小時 = 1440 根 K 線)
-                val klinesRequest = Request.Builder()
-                    .url("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1m&limit=1440")
-                    .build()
-                val klinesResponse = client.newCall(klinesRequest).execute()
-                val klinesJson = klinesResponse.body?.string()
-
-                if (klinesResponse.isSuccessful && klinesJson != null) {
-                    val type = object : TypeToken<List<List<Any>>>() {}.type
-                    val rawCandlesticks: List<List<Any>> = gson.fromJson(klinesJson, type)
-
-                    val entries = rawCandlesticks.map { rawData ->
-                        val candlestick = rawData.toCandlestick()
-                        Entry(candlestick.openTime.toFloat(), candlestick.closePrice) // X 軸使用時間戳記
-                    }
-                    withContext(Dispatchers.Main) {
-                        historicalData.value = entries
-                    }
-                } else {
-                    val error = "抓取 KLines 錯誤: ${klinesResponse.code} - ${klinesResponse.message}"
-                    Log.e("PriceTracker", error)
-                    withContext(Dispatchers.Main) { errorMessage.value = error }
-                }
-
-            } catch (e: IOException) {
-                val error = "網路錯誤: ${e.message}"
-                Log.e("PriceTracker", error, e)
-                withContext(Dispatchers.Main) { errorMessage.value = error }
-            } catch (e: Exception) {
-                val error = "發生未知錯誤: ${e.message}"
-                Log.e("PriceTracker", error, e)
-                withContext(Dispatchers.Main) { errorMessage.value = error }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    isLoading.value = false
-                }
-            }
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("PAXG/USDT 金價追蹤") })
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "當前 PAXG 價格:",
-                style = MaterialTheme.typography.h6,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            Text(
-                text = currentPrice.value,
-                style = MaterialTheme.typography.h4,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("24h 漲跌:", style = MaterialTheme.typography.subtitle1)
-                    Text(
-                        text = priceChange24h.value,
-                        color = if (priceChange24h.value.startsWith("-")) Color.RED else Color.GREEN,
-                        style = MaterialTheme.typography.body1
-                    )
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("24h 漲跌 %:", style = MaterialTheme.typography.subtitle1)
-                    Text(
-                        text = priceChangePercent24h.value,
-                        color = if (priceChangePercent24h.value.startsWith("-")) Color.RED else Color.GREEN,
-                        style = MaterialTheme.typography.body1
+                    GoldPriceTrackerScreen(
+                        currentPrice = _currentPrice.value,
+                        chartEntries = _chartEntries.value,
+                        klineTimestamps = _klineTimestamps.value
                     )
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(24.dp))
+        // Fetch data when the activity is created
+        fetchPriceData()
+        fetchKlineData()
+    }
 
-            if (isLoading.value) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            } else if (errorMessage.value != null) {
-                Text(
-                    text = "錯誤: ${errorMessage.value}",
-                    color = Color.RED,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                )
-            } else {
-                Text(
-                    text = "24 小時價格走勢 (1 分鐘間隔)",
-                    style = MaterialTheme.typography.h6,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                ChartDisplay(historicalData.value)
-            }
+    override fun onDestroy() {
+        super.onDestroy()
+        // Cancel all coroutines when the activity is destroyed to prevent leaks
+        coroutineScope.cancel()
+    }
 
-            // 刷新按鈕 (目前數據在 LaunchedEffect 觸發一次)
-            Button(
-                onClick = { /* 如需手動刷新，可在此觸發 LaunchedEffect 或重新發起請求 */ },
-                modifier = Modifier.padding(top = 16.dp),
-                enabled = !isLoading.value // 載入時禁用按鈕
-            ) {
-                Text("刷新數據")
-            }
+    // =====================================
+    // Network Data Fetching Functions
+    // =====================================
+
+    private fun fetchPriceData() {
+        coroutineScope.launch {
+            val request = Request.Builder()
+                .url("https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT")
+                .build()
+
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    Log.e("MainActivity", "Failed to fetch current price data: ${e.message}", e)
+                    runOnUiThread {
+                        _currentPrice.value = "Error: ${e.message}"
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.use {
+                        if (!response.isSuccessful) {
+                            val errorBody = response.body?.string()
+                            Log.e("MainActivity", "Unexpected code ${response.code} for price data. Body: $errorBody")
+                            runOnUiThread {
+                                _currentPrice.value = "Error: ${response.code}"
+                            }
+                            return
+                        }
+
+                        val responseBody = response.body?.string()
+                        if (responseBody != null) {
+                            try {
+                                val ticker = gson.fromJson(responseBody, TickerPriceResponse::class.java)
+                                runOnUiThread {
+                                    // Format to 2 decimal places for price
+                                    val formattedPrice = String.format(Locale.US, "%.2f", ticker.price.toDouble())
+                                    _currentPrice.value = "$formattedPrice USDT"
+                                }
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Error parsing current price data: ${e.message}", e)
+                                runOnUiThread {
+                                    _currentPrice.value = "Error parsing price"
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        }
+    }
+
+    private fun fetchKlineData() {
+        coroutineScope.launch {
+            // Fetch 24 hourly klines for a 24-hour chart
+            val request = Request.Builder()
+                .url("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24")
+                .build()
+
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    Log.e("MainActivity", "Failed to fetch kline data: ${e.message}", e)
+                    runOnUiThread {
+                        _chartEntries.value = emptyList() // Clear chart on error
+                        _klineTimestamps.value = emptyList()
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.use {
+                        if (!response.isSuccessful) {
+                            val errorBody = response.body?.string()
+                            Log.e("MainActivity", "Unexpected code ${response.code} for kline data. Body: $errorBody")
+                            runOnUiThread {
+                                _chartEntries.value = emptyList()
+                                _klineTimestamps.value = emptyList()
+                            }
+                            return
+                        }
+
+                        val responseBody = response.body?.string()
+                        if (responseBody != null) {
+                            try {
+                                // Binance klines response is a List<List<Any>>, use TypeToken for generic parsing
+                                val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                    List::class.java,
+                                    List::class.java,
+                                    Any::class.java // Inner list elements can be Double or String
+                                ).type
+                                val klineRawData: List<List<Any>> = gson.fromJson(responseBody, type)
+
+                                val klineDataList = klineRawData.map { KlineData.fromJsonArray(it) }
+
+                                val entries = mutableListOf<Entry>()
+                                val timestamps = mutableListOf<Long>()
+
+                                klineDataList.forEachIndexed { index, kline ->
+                                    // Use index as X-value for evenly spaced hourly data
+                                    // MPAndroidChart expects float for X and Y
+                                    entries.add(Entry(index.toFloat(), kline.close.toFloat()))
+                                    timestamps.add(kline.openTime) // Store open time for X-axis labels
+                                }
+
+                                runOnUiThread {
+                                    _chartEntries.value = entries
+                                    _klineTimestamps.value = timestamps
+                                }
+
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "Error parsing kline data: ${e.message}", e)
+                                runOnUiThread {
+                                    _chartEntries.value = emptyList()
+                                    _klineTimestamps.value = emptyList()
+                                }
+                            }
+                        }
+                    }
+                }
+            })
         }
     }
 }
 
+// =====================================
+// Compose UI for Gold Price Tracker
+// =====================================
+
 @Composable
-fun ChartDisplay(entries: List<Entry>) {
-    val context = LocalContext.current
-    AndroidView(
+fun GoldPriceTrackerScreen(currentPrice: String, chartEntries: List<Entry>, klineTimestamps: List<Long>) {
+    Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp),
-        factory = { ctx ->
-            LineChart(ctx).apply {
-                description.isEnabled = false // 禁用描述文本
-                setTouchEnabled(true) // 允許觸摸互動
-                isDragEnabled = true // 允許拖動
-                setScaleEnabled(true) // 允許縮放
-                setPinchZoom(true) // 允許雙指縮放
-                setDrawGridBackground(false) // 不繪製網格背景
-                setBackgroundColor(Color.WHITE) // 背景顏色
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "PAXG/USDT (Gold) Price",
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        Text(
+            text = "Current Price: $currentPrice",
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
 
-                // X 軸設定
-                xAxis.position = XAxis.XAxisPosition.BOTTOM // X 軸在底部
-                xAxis.setDrawGridLines(false) // 不繪製網格線
-                xAxis.setDrawAxisLine(true) // 繪製 X 軸線
-                xAxis.textColor = Color.BLACK // X 軸文本顏色
-                xAxis.granularity = 60 * 60 * 1000f // 每個小時一個標籤 (毫秒)
-                xAxis.valueFormatter = object : ValueFormatter() {
-                    private val mFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
-                        return mFormat.format(Date(value.toLong())) // 將毫秒時間戳記格式化為 HH:mm
+        // AndroidView allows embedding traditional Android Views into Compose UI
+        AndroidView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp),
+            factory = { context ->
+                // Initialize the LineChart
+                LineChart(context).apply {
+                    description.isEnabled = false // No description text
+                    setTouchEnabled(true) // Enable touch gestures
+                    isDragEnabled = true // Enable dragging
+                    setScaleEnabled(true) // Enable scaling
+                    setPinchZoom(true) // Enable pinch zoom
+                    setDrawGridBackground(false) // Don't draw a background grid
+                    setBackgroundColor(android.graphics.Color.WHITE) // Set background color
+
+                    // Customize X-axis
+                    xAxis.apply {
+                        position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
+                        setDrawGridLines(false) // No vertical grid lines
+                        setDrawAxisLine(true)
+                        granularity = 1f // Minimum interval between labels is 1 unit
+                        labelRotationAngle = -45f // Rotate labels to prevent overlap
+                        valueFormatter = object : ValueFormatter() {
+                            private val format = SimpleDateFormat("HH:mm", Locale.getDefault())
+                            override fun getFormattedValue(value: Float): String {
+                                // Map the float index back to the actual timestamp
+                                val index = value.roundToInt()
+                                return if (index >= 0 && index < klineTimestamps.size) {
+                                    format.format(Date(klineTimestamps[index]))
+                                } else {
+                                    ""
+                                }
+                            }
+                        }
                     }
+
+                    // Customize Left Y-axis
+                    axisLeft.apply {
+                        setDrawGridLines(true) // Horizontal grid lines
+                        setDrawAxisLine(true)
+                        setDrawZeroLine(false)
+                        // Customize value format for Y-axis (e.g., to 2 decimal places)
+                        valueFormatter = object : ValueFormatter() {
+                            override fun getFormattedValue(value: Float): String {
+                                return String.format(Locale.US, "%.2f", value)
+                            }
+                        }
+                    }
+
+                    // Customize Right Y-axis (disable)
+                    axisRight.isEnabled = false
+
+                    // Add some animation for a smoother look
+                    animateX(1000, Easing.EaseInOutQuart)
                 }
-                xAxis.labelRotationAngle = -45f // 旋轉標籤以避免重疊
-
-                // Y 軸設定
-                axisRight.isEnabled = false // 禁用右 Y 軸
-                axisLeft.setDrawGridLines(true) // 繪製左 Y 軸網格線
-                axisLeft.setDrawAxisLine(true) // 繪製左 Y 軸線
-                axisLeft.textColor = Color.BLACK // 左 Y 軸文本顏色
-
-                legend.isEnabled = false // 禁用圖例
-            }
-        },
-        update = { chart ->
-            if (entries.isNotEmpty()) {
-                val dataSet = LineDataSet(entries, "PAXG/USDT 價格").apply {
-                    color = Color.BLUE // 線條顏色
-                    setCircleColor(Color.BLUE) // 數據點圓圈顏色
-                    setDrawValues(false) // 不繪製數據點上的值
-                    lineWidth = 2f // 線條寬度
-                    circleRadius = 0f // 不顯示數據點的圓圈
-                    setDrawCircleHole(false) // 不繪製圓圈中心孔
-                    mode = LineDataSet.Mode.CUBIC_BEZIER // 平滑曲線
-                    setDrawFilled(true) // 繪製填充區域
-                    fillColor = Color.parseColor("#80ADD8E6") // 淺藍色半透明填充
-                    fillAlpha = 100 // 填充透明度
+            },
+            update = { chart ->
+                // Update the chart data whenever `chartEntries` changes
+                if (chartEntries.isNotEmpty()) {
+                    val dataSet = LineDataSet(chartEntries, "PAXG/USDT Price (24h)").apply {
+                        color = android.graphics.Color.parseColor("#007bff") // A nice blue color
+                        valueTextColor = android.graphics.Color.BLACK
+                        setDrawValues(false) // Don't draw individual value numbers on the line
+                        setDrawCircles(false) // Don't draw circles on data points
+                        lineWidth = 2f
+                        mode = LineDataSet.Mode.CUBIC_BEZIER // Smooth curve line
+                        fillAlpha = 65
+                        fillColor = android.graphics.Color.parseColor("#007bff") // Fill color
+                        setDrawFilled(true) // Draw shaded area below the line
+                    }
+                    val lineData = LineData(dataSet)
+                    chart.data = lineData
+                    chart.invalidate() // Refresh chart view
+                } else {
+                    chart.clear() // Clear chart if no data
+                    chart.setNoDataText("Loading chart data or no data available...")
+                    chart.invalidate()
                 }
-
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-                chart.invalidate() // 刷新圖表
-            } else {
-                chart.clear() // 清除圖表數據
-                chart.setNoDataText("無圖表數據。") // 顯示無數據文本
-                chart.invalidate() // 刷新圖表
             }
-        }
-    )
+        )
+    }
 }
+
+// =====================================
+// Preview Function for Compose (Optional)
+// =====================================
 
 @Preview(showBackground = true)
 @Composable
-fun DefaultPreview() {
-    AiagentTheme {
-        PriceTrackerApp()
+fun GoldPriceTrackerScreenPreview() {
+    AiAgentTheme {
+        GoldPriceTrackerScreen(
+            currentPrice = "2350.78 USDT",
+            // Example data for preview
+            chartEntries = listOf(
+                Entry(0f, 2300f), Entry(1f, 2310f), Entry(2f, 2305f),
+                Entry(3f, 2320f), Entry(4f, 2315f), Entry(5f, 2330f),
+                Entry(6f, 2325f), Entry(7f, 2340f), Entry(8f, 2335f),
+                Entry(9f, 2350f), Entry(10f, 2345f), Entry(11f, 2360f),
+                Entry(12f, 2355f), Entry(13f, 2370f), Entry(14f, 2365f),
+                Entry(15f, 2380f), Entry(16f, 2375f), Entry(17f, 2390f),
+                Entry(18f, 2385f), Entry(19f, 2400f), Entry(20f, 2395f),
+                Entry(21f, 2410f), Entry(22f, 2405f), Entry(23f, 2420f)
+            ),
+            klineTimestamps = List(24) { index ->
+                System.currentTimeMillis() - (23 - index) * 60 * 60 * 1000L
+            }
+        )
     }
 }
 ```
 
 ---
 
-**可能需要的 `build.gradle (Module: app)` 依賴項（請根據你的專案情況檢查並添加）**
+### 3. `app/build.gradle.kts` 修正程式碼
 
-```gradle
+這個檔案負責應用程式模組的依賴庫配置。請確保您的 `app/build.gradle.kts` 包含以下內容，特別是在 `dependencies { ... }` 區塊中加入 OkHttp、Gson 和 MPAndroidChart：
+
+```kotlin
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.example.aiagent" // 確保命名空間正確
+    compileSdk = 34 // 或您專案中使用的最新SDK版本
+
+    defaultConfig {
+        applicationId = "com.example.aiagent"
+        minSdk = 24 // 最低SDK版本
+        targetSdk = 34 // 或您專案中使用的最新SDK版本
+        versionCode = 1
+        versionName = "1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables {
+            useSupportLibrary = true
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+    buildFeatures {
+        compose = true // 啟用 Jetpack Compose
+    }
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.1" // 請檢查您Android Studio建議的最新穩定版本
+    }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
 dependencies {
-    // ... 其他依賴項
-
-    // Compose BOM (Bill of Materials) 確保 Compose 庫版本一致
-    // 請檢查最新的 Compose BOM 版本
-    implementation(platform("androidx.compose:compose-bom:2023.08.00"))
+    // AndroidX & Compose 核心依賴
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation(platform("androidx.compose:compose-bom:2023.08.00")) // 請檢查最新穩定版本
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview") // 解決 Preview 相關錯誤
-    implementation("androidx.compose.material:material")
-    implementation("androidx.activity:activity-compose:1.8.2") // 請檢查最新版本
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2") // 請檢查最新版本
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2") // 請檢查最新版本
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
 
-    // 調試工具 (僅用於 debug builds)
+    // OkHttp for networking
+    implementation("com.squareup.okhttp3:okhttp:4.12.0") // 推薦使用最新穩定版本
+
+    // Gson for JSON parsing
+    implementation("com.google.code.gson:gson:2.10.1") // 推薦使用最新穩定版本
+
+    // MPAndroidChart for line chart
+    // MPAndroidChart usually comes from Jitpack.io, ensure it's in settings.gradle.kts
+    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
+
+    // Test dependencies
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2023.08.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-
-    // OkHttp 用於網路請求
-    implementation("com.squareup.okhttp3:okhttp:4.12.0") // 請檢查最新版本
-
-    // Gson 用於 JSON 解析
-    implementation("com.google.code.gson:gson:2.10.1") // 請檢查最新版本
-
-    // MPAndroidChart 用於繪製圖表
-    // 通常透過 JitPack 使用，請確保在 settings.gradle 中也配置了 JitPack
-    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0") // 請檢查最新版本
 }
 ```
 
 ---
 
-**`settings.gradle` (如果使用 JitPack 獲取 MPAndroidChart)**
+### 4. `settings.gradle.kts` 修正程式碼
 
-```gradle
+這個檔案負責整個專案的 Gradle 設置，包括定義 Gradle 插件和依賴庫的來源倉庫。MPAndroidChart 通常從 Jitpack 獲取，所以需要在這裡添加 Jitpack 倉庫。
+
+```kotlin
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' } // 添加 JitPack 倉庫
+        // 添加 Jitpack 倉庫，MPAndroidChart 需要此倉庫
+        maven { url = uri("https://jitpack.io") }
     }
 }
+
+rootProject.name = "ai-agent-android" // 您的專案名稱
+include(":app")
 ```
 
 ---
 
-**`AndroidManifest.xml` (必須添加網路權限)**
+### 5. `AndroidManifest.xml` 更新
+
+由於需要進行網路請求，請確保您的 `AndroidManifest.xml` 包含網路權限：
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 必須添加 INTERNET 權限才能進行網路請求 -->
+    <!-- 這是必不可少的網路權限 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -441,34 +573,37 @@ dependencyResolutionManagement {
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Aiagent"
+        android:theme="@style/Theme.AiAgent"
         tools:targetApi="31">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.Aiagent">
+            android:theme="@style/Theme.AiAgent">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
     </application>
+
 </manifest>
 ```
 
 ---
 
-**修復說明：**
+### 修復步驟總結：
 
-1.  **檔案開頭問題**：確保 `package com.example.aiagent` 語句是 `MainActivity.kt` 檔案中的第一行程式碼，沒有任何註釋、空行或其他非法的頂層宣告在它前面。所有 `import` 語句緊隨其後。
-2.  **`Unresolved reference: Preview`**：添加了 `import androidx.compose.ui.tooling.preview.Preview`，這解決了 `@Preview` 註解無法解析的問題。
-3.  **功能實現**：
-    *   使用 `OkHttpClient` 發送 HTTP 請求到 Binance API。
-    *   使用 `Gson` 解析 API 返回的 JSON 數據，定義了 `TickerResponse` 和 `Candlestick` 數據模型。
-    *   在 `PriceTrackerApp` Composable 中，使用 `LaunchedEffect` 在組件首次顯示時異步抓取數據，並在抓取過程中顯示 `CircularProgressIndicator`。
-    *   使用 `AndroidView` 嵌入 `MPAndroidChart` 的 `LineChart`，並將 24 小時 K 線數據（1 分鐘間隔）轉換為圖表所需的 `Entry` 列表。
-    *   X 軸的 `ValueFormatter` 已調整為正確顯示時間戳記為 `HH:mm` 格式。
-    *   UI 使用 Jetpack Compose 構建，顯示當前價格、24 小時漲跌幅和走勢圖。
+1.  **開啟 `app/src/main/java/com/example/aiagent/MainActivity.kt` 檔案。**
+2.  **刪除** 第 385 行到 419 行（或者任何包含 `implementation`, `repositories` 等 Gradle 語法的行）。
+3.  **將上面提供的「`MainActivity.kt` 的完整修正程式碼」複製並貼上，替換掉您現有的 `MainActivity.kt` 內容。**
+4.  **開啟 `app/build.gradle.kts` 檔案。**
+5.  **將上面提供的「`app/build.gradle.kts` 修正程式碼」複製並貼上，替換掉您現有的 `app/build.gradle.kts` 內容（或者至少將 `dependencies` 區塊更新為包含 OkHttp, Gson, MPAndroidChart 的內容）。**
+6.  **開啟 `settings.gradle.kts` 檔案。**
+7.  **將上面提供的「`settings.gradle.kts` 修正程式碼」複製並貼上，替換掉您現有的 `settings.gradle.kts` 內容（確保 `dependencyResolutionManagement` 區塊包含 `maven { url = uri("https://jitpack.io") }`）。**
+8.  **開啟 `app/src/main/AndroidManifest.xml` 檔案。**
+9.  **在 `<application>` 標籤上方（作為 `<manifest>` 的子元素）添加 `<uses-permission android:name="android.permission.INTERNET" />`。**
+10. **同步 Gradle 專案。** 在 Android Studio 中，這通常會自動觸發，或者您可以手動點擊 "Sync Project with Gradle Files" 按鈕（通常在工具列上）。
 
-將上述程式碼更新到你的專案中，並確保 `build.gradle` 和 `AndroidManifest.xml` 中的配置正確無誤，應該就能解決你遇到的編譯問題並實現金價追蹤功能。
+完成這些步驟後，您的專案應該能夠正確編譯並執行，實現金價追蹤功能。

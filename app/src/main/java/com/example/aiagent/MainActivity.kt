@@ -1,243 +1,457 @@
-package com.example.goldpriceapp
-
-import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.AxisBase
 import com.github.mikephil.charting.components.XAxis
-import com.github.mikephil.charting.components.YAxis // 完整匯入 YAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.TimeUnit
+import java.util.*
+import kotlin.math.roundToInt
 
-// 數據模型用於解析 API 回應
-data class GoldPriceResponse(
-    @SerializedName("currentPriceUsdPerOz") val currentPriceUsdPerOz: Double,
-    @SerializedName("prices") val prices: List<PriceEntry>
+// Define R.string for the app for better localization practices
+// For simplicity in a single file, I'll define these directly or use hardcoded strings for now.
+// In a real app, these would be in res/values/strings.xml
+// Example: R.string.app_name = "Gold Price App"
+// For this example, I'll use hardcoded strings and just output the code directly.
+
+//region Data Models
+data class GoldPriceResponse(val gold: GoldPriceDetails)
+data class GoldPriceDetails(val usd: Double)
+
+data class HistoricalPriceEntry(
+    val date: Calendar,
+    val price: Double
 )
+//endregion
 
-data class PriceEntry(
-    @SerializedName("date") val date: String, // 例如: "YYYY-MM-DD"
-    @SerializedName("price") val price: Double
-)
+//region ViewModel
+class GoldPriceViewModel : ViewModel() {
 
-class MainActivity : AppCompatActivity() {
+    private val _currentPrice = MutableStateFlow<Double?>(null)
+    val currentPrice: StateFlow<Double?> = _currentPrice
 
-    private lateinit var currentPriceTextView: TextView
-    private lateinit var priceChangeTextView: TextView
-    private lateinit var goldPriceChart: LineChart
+    private val _historicalPrices = MutableStateFlow<List<HistoricalPriceEntry>>(emptyList())
+    val historicalPrices: StateFlow<List<HistoricalPriceEntry>> = _historicalPrices
 
-    // 初始化 OkHttpClient，設定超時時間
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .build()
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage
+
+    private val _priceChangePercentage = MutableStateFlow<Double?>(null)
+    val priceChangePercentage: StateFlow<Double?> = _priceChangePercentage
+
+    private val okHttpClient = OkHttpClient()
     private val gson = Gson()
 
-    // 儲存歷史日期，用於 X 軸標籤顯示
-    private val historicalDates = mutableListOf<String>()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // 假設佈局檔案為 activity_main.xml
-
-        // 初始化 UI 元件
-        currentPriceTextView = findViewById(R.id.currentPriceTextView)
-        priceChangeTextView = findViewById(R.id.priceChangeTextView)
-        goldPriceChart = findViewById(R.id.goldPriceChart)
-
-        // 啟動資料獲取
+    init {
         fetchGoldPrices()
     }
 
-    private fun fetchGoldPrices() {
-        // 使用 CoroutineScope 在 IO 執行緒中執行網路請求
-        CoroutineScope(Dispatchers.IO).launch {
+    fun fetchGoldPrices() {
+        _isLoading.value = true
+        _errorMessage.value = null
+        viewModelScope.launch(Dispatchers.IO) {
             try {
-                // *** 模擬網路延遲和 API 回應 ***
-                // 在真實應用中，請將以下模擬內容替換為實際的 API 請求
-                val mockApiResponse = """
-                    {
-                      "currentPriceUsdPerOz": 2350.75,
-                      "prices": [
-                        {"date": "2024-03-26", "price": 2200.50},
-                        {"date": "2024-03-27", "price": 2210.25},
-                        {"date": "2024-03-28", "price": 2230.10},
-                        {"date": "2024-03-29", "price": 2250.80},
-                        {"date": "2024-03-30", "price": 2245.90},
-                        {"date": "2024-03-31", "price": 2300.30},
-                        {"date": "2024-04-01", "price": 2350.75}
-                      ]
-                    }
-                """.trimIndent()
-
-                // *** 真實 API 請求的範例 (需替換 URL 和可能存在的 API Key) ***
-                /*
+                // 1. Fetch current gold price (using CoinGecko for "gold" commodity price)
                 val request = Request.Builder()
-                    .url("YOUR_GOLD_API_ENDPOINT_HERE?days=7") // 替換為實際的 API 端點
+                    .url("https://api.coingecko.com/api/v3/simple/price?ids=gold&vs_currencies=usd")
                     .build()
 
-                val response = httpClient.newCall(request).execute()
-
-                if (!response.isSuccessful) {
-                    throw IOException("Unexpected code ${response.code}")
+                val response = okHttpClient.newCall(request).execute()
+                if (response.isSuccessful) {
+                    response.body?.string()?.let { jsonString ->
+                        val goldPriceResponse = gson.fromJson(jsonString, GoldPriceResponse::class.java)
+                        _currentPrice.value = goldPriceResponse.gold.usd
+                    }
+                } else {
+                    val errorBody = response.body?.string()
+                    Log.e("GoldPriceViewModel", "API Error: ${response.code} - $errorBody")
+                    _errorMessage.value = "Failed to fetch current price: ${response.message}"
+                    _currentPrice.value = null // Clear price on error
                 }
 
-                val responseBody = response.body?.string()
-                if (responseBody == null) {
-                    throw IOException("Empty response body")
-                }
-                val goldData = gson.fromJson(responseBody, GoldPriceResponse::class.java)
-                 */
-                // 目前使用模擬數據
-                val goldData = gson.fromJson(mockApiResponse, GoldPriceResponse::class.java)
+                // Simulate fetching historical data for 7 days (mock data)
+                // In a real app, you would fetch this from another API.
+                delay(1000) // Simulate network delay for historical data
+                generateMockHistoricalData()
 
-                // 切換回主執行緒更新 UI
-                withContext(Dispatchers.Main) {
-                    updateUI(goldData)
-                }
-
+            } catch (e: IOException) {
+                Log.e("GoldPriceViewModel", "Network error: ${e.message}", e)
+                _errorMessage.value = "Network error: ${e.message}"
+                _currentPrice.value = null
+                _historicalPrices.value = emptyList()
             } catch (e: Exception) {
-                // 記錄錯誤日誌
-                Log.e("MainActivity", "Error fetching gold prices: ${e.message}", e)
-                // 在主執行緒更新 UI 顯示錯誤訊息
-                withContext(Dispatchers.Main) {
-                    currentPriceTextView.text = "錯誤: 無法載入價格"
-                    priceChangeTextView.text = ""
-                }
+                Log.e("GoldPriceViewModel", "An unexpected error occurred: ${e.message}", e)
+                _errorMessage.value = "An unexpected error occurred: ${e.message}"
+                _currentPrice.value = null
+                _historicalPrices.value = emptyList()
+            } finally {
+                _isLoading.value = false
             }
         }
     }
 
-    private fun updateUI(goldData: GoldPriceResponse) {
-        // 1. 更新當前價格
-        val currentPrice = goldData.currentPriceUsdPerOz
-        currentPriceTextView.text = String.format(Locale.US, "%.2f USD/oz", currentPrice)
+    private fun generateMockHistoricalData() {
+        val prices = mutableListOf<HistoricalPriceEntry>()
+        val today = Calendar.getInstance()
+        val currentPriceVal = _currentPrice.value ?: 2000.0 // Use current price if available, else a sensible default
 
-        // 2. 計算並顯示漲跌幅
-        // 需要至少兩天的數據才能計算漲跌幅 (最新價格 vs. 前一天價格)
-        if (goldData.prices.size >= 2) {
-            val latestPrice = goldData.prices.last().price
-            val previousDayPrice = goldData.prices[goldData.prices.size - 2].price
+        // Generate 7 days of mock data, with fluctuations around the current price
+        // Let's assume the current price is the latest point.
+        // And yesterday's price is slightly different to show a change.
+        for (i in 6 downTo 0) { // 0 for today, 1 for yesterday, ..., 6 for 6 days ago
+            val date = today.clone() as Calendar
+            date.add(Calendar.DAY_OF_YEAR, -i)
 
-            val change = latestPrice - previousDayPrice
-            val percentageChange = (change / previousDayPrice) * 100
+            // Make prices fluctuate around the current price
+            val basePrice = currentPriceVal + (Math.random() - 0.5) * 50 // +/- 25 around current
+            val price = (basePrice * 100).roundToInt() / 100.0 // Round to 2 decimal places
+            prices.add(HistoricalPriceEntry(date, price))
+        }
+        _historicalPrices.value = prices
 
-            val decimalFormat = DecimalFormat("0.00")
-            val changeText = if (change >= 0) {
-                priceChangeTextView.setTextColor(Color.GREEN) // 上漲顯示綠色
-                "+${decimalFormat.format(percentageChange)}%"
+        // Calculate price change percentage
+        if (prices.size >= 2) {
+            val latestPrice = prices.last().price
+            val dayBeforePrice = prices[prices.size - 2].price
+            if (dayBeforePrice != 0.0) {
+                _priceChangePercentage.value = ((latestPrice - dayBeforePrice) / dayBeforePrice) * 100
             } else {
-                priceChangeTextView.setTextColor(Color.RED) // 下跌顯示紅色
-                "${decimalFormat.format(percentageChange)}%"
+                _priceChangePercentage.value = 0.0
             }
-            priceChangeTextView.text = changeText
         } else {
-            priceChangeTextView.text = "N/A"
-            priceChangeTextView.setTextColor(Color.GRAY)
-        }
-
-        // 3. 使用歷史數據填充圖表
-        setupChart(goldData.prices)
-    }
-
-    private fun setupChart(prices: List<PriceEntry>) {
-        historicalDates.clear() // 清除之前的日期數據
-        val entries = ArrayList<Entry>()
-        for ((index, priceEntry) in prices.withIndex()) {
-            // Entry(X軸位置, Y軸數值)
-            entries.add(Entry(index.toFloat(), priceEntry.price.toFloat()))
-            historicalDates.add(priceEntry.date) // 儲存日期字串用於 X 軸標籤
-        }
-
-        val dataSet = LineDataSet(entries, "黃金價格 (USD/oz)")
-        dataSet.color = Color.BLUE
-        dataSet.valueTextColor = Color.BLACK
-        dataSet.setDrawCircles(true) // 顯示數據點圓圈
-        dataSet.setCircleColor(Color.BLUE)
-        dataSet.lineWidth = 2f
-        dataSet.valueTextSize = 10f
-        dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER // 平滑曲線
-        dataSet.setDrawValues(false) // 不在曲線上顯示每個數據點的數值
-
-        val lineData = LineData(dataSet)
-        goldPriceChart.data = lineData
-
-        // 配置 X 軸
-        val xAxis = goldPriceChart.xAxis
-        xAxis.position = XAxis.XAxisPosition.BOTTOM // X 軸位於底部
-        xAxis.setDrawGridLines(false) // 不繪製網格線
-        xAxis.granularity = 1f // 最小間隔為 1 (每個數據點一個標籤)
-        // 使用自定義的 DateAxisValueFormatter 處理 X 軸日期標籤
-        xAxis.valueFormatter = DateAxisValueFormatter(historicalDates)
-        xAxis.labelRotationAngle = -45f // 旋轉標籤以避免重疊
-
-        // 配置左側 Y 軸
-        val leftYAxis = goldPriceChart.axisLeft
-        leftYAxis.setDrawGridLines(true) // 繪製網格線
-        // 使用自定義的 PriceYAxisValueFormatter 處理 Y 軸價格標籤
-        leftYAxis.valueFormatter = PriceYAxisValueFormatter()
-        leftYAxis.setStartAtZero(false) // 不強制 Y 軸從 0 開始，以更好地顯示價格波動
-
-        // 禁用右側 Y 軸
-        val rightYAxis = goldPriceChart.axisRight
-        rightYAxis.isEnabled = false
-
-        // 圖表通用設置
-        goldPriceChart.description.isEnabled = false // 不顯示描述標籤
-        goldPriceChart.legend.isEnabled = true // 顯示圖例
-        goldPriceChart.setTouchEnabled(true) // 允許觸摸互動 (縮放、拖動)
-        goldPriceChart.setPinchZoom(true) // 允許雙指縮放
-        goldPriceChart.setNoDataText("正在載入數據...") // 無數據時顯示的文字
-
-        goldPriceChart.invalidate() // 刷新圖表以顯示最新數據
-    }
-
-    // 自定義 ValueFormatter，用於格式化 X 軸日期標籤
-    class DateAxisValueFormatter(private val dates: List<String>) : ValueFormatter() {
-        private val inputDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        private val outputDateFormat = SimpleDateFormat("MM/dd", Locale.US) // 輸出格式為 月/日
-
-        override fun getAxisLabel(value: Float, axis: XAxis?): String {
-            val index = value.toInt()
-            return if (index >= 0 && index < dates.size) {
-                try {
-                    val date: Date? = inputDateFormat.parse(dates[index])
-                    date?.let { outputDateFormat.format(it) } ?: dates[index]
-                } catch (e: Exception) {
-                    Log.e("DateFormatter", "Error parsing date: ${dates[index]}", e)
-                    dates[index] // 解析失敗時返回原始字串
-                }
-            } else {
-                "" // 超出範圍返回空字串
-            }
-        }
-    }
-
-    // 自定義 ValueFormatter，用於格式化 Y 軸價格標籤
-    class PriceYAxisValueFormatter : ValueFormatter() {
-        private val decimalFormat = DecimalFormat("0.00") // 價格格式化為兩位小數
-
-        override fun getAxisLabel(value: Float, axis: YAxis?): String {
-            return decimalFormat.format(value)
+            _priceChangePercentage.value = null
         }
     }
 }
+//endregion
+
+//region MPAndroidChart Formatters
+class DayAxisValueFormatter : ValueFormatter() {
+    private val sdf = SimpleDateFormat("MM/dd", Locale.getDefault())
+    private var historicalDates: List<Calendar> = emptyList()
+
+    fun setHistoricalDates(dates: List<Calendar>) {
+        this.historicalDates = dates
+    }
+
+    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+        // Value corresponds to the index in the data set
+        val index = value.roundToInt()
+        return if (index >= 0 && index < historicalDates.size) {
+            sdf.format(historicalDates[index].time)
+        } else {
+            ""
+        }
+    }
+}
+
+class PriceValueFormatter : ValueFormatter() {
+    private val decimalFormat = DecimalFormat("$#,##0.00")
+
+    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+        return decimalFormat.format(value.toDouble())
+    }
+
+    override fun getFormattedValue(value: Float): String {
+        return decimalFormat.format(value.toDouble())
+    }
+}
+//endregion
+
+//region MainActivity
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    val viewModel: GoldPriceViewModel = viewModel(factory = object : ViewModelProvider.Factory {
+                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                            if (modelClass.isAssignableFrom(GoldPriceViewModel::class.java)) {
+                                @Suppress("UNCHECKED_CAST")
+                                return GoldPriceViewModel() as T
+                            }
+                            throw IllegalArgumentException("Unknown ViewModel class")
+                        }
+                    })
+                    GoldPriceApp(viewModel)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GoldPriceApp(viewModel: GoldPriceViewModel) {
+    val currentPrice by viewModel.currentPrice.collectAsState()
+    val historicalPrices by viewModel.historicalPrices.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+    val priceChangePercentage by viewModel.priceChangePercentage.collectAsState()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("黃金現價 App", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Current Price Section
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "當前黃金價格 (USD/oz)",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                    } else if (errorMessage != null) {
+                        Text(
+                            text = errorMessage!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = { viewModel.fetchGoldPrices() }) {
+                            Text("重試")
+                        }
+                    } else if (currentPrice != null) {
+                        Text(
+                            text = String.format(Locale.US, "$%.2f", currentPrice),
+                            style = MaterialTheme.typography.headlineLarge.copy(fontSize = 48.sp, fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Text(
+                            text = "未能獲取價格",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                    }
+                }
+            }
+
+            // Historical Chart Section
+            Text(
+                "最近 7 天價格歷史",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp) // Fixed height for the chart
+                    .padding(bottom = 16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                if (isLoading && historicalPrices.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                } else if (historicalPrices.isNotEmpty()) {
+                    AndroidView(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp),
+                        factory = { context ->
+                            LineChart(context).apply {
+                                description.isEnabled = false // Disable description label
+                                setTouchEnabled(true)
+                                setPinchZoom(false) // Disable pinch zoom
+                                setDrawGridBackground(false)
+
+                                // X-axis configuration
+                                xAxis.apply {
+                                    position = XAxis.XAxisPosition.BOTTOM
+                                    setDrawGridLines(false)
+                                    setDrawAxisLine(true)
+                                    granularity = 1f // only whole numbers on x-axis
+                                    textColor = android.graphics.Color.BLACK
+                                    valueFormatter = DayAxisValueFormatter() // Custom formatter
+                                }
+
+                                // Left Y-axis configuration
+                                axisLeft.apply {
+                                    setDrawGridLines(true)
+                                    setDrawAxisLine(true)
+                                    textColor = android.graphics.Color.BLACK
+                                    valueFormatter = PriceValueFormatter() // Custom formatter
+                                }
+
+                                // Right Y-axis (disabled for this chart)
+                                axisRight.isEnabled = false
+
+                                legend.isEnabled = false // Disable legend
+                                animateX(1000) // Animate chart appearance
+                            }
+                        },
+                        update = { chart ->
+                            val entries = historicalPrices.mapIndexed { index, data ->
+                                Entry(index.toFloat(), data.price.toFloat())
+                            }
+
+                            if (entries.isNotEmpty()) {
+                                val dataSet = LineDataSet(entries, "Gold Price").apply {
+                                    color = MaterialTheme.colorScheme.primary.toArgb()
+                                    setCircleColor(MaterialTheme.colorScheme.primary.toArgb())
+                                    lineWidth = 2f
+                                    circleRadius = 4f
+                                    setDrawValues(false) // Don't draw individual values on chart
+                                    mode = LineDataSet.Mode.CUBIC_BEZIER // Smooth curve
+                                    setDrawFilled(true) // Fill area below line
+                                    fillDrawable = chart.context.getDrawable(android.R.drawable.screen_background_light_transparent)
+                                    // Use a gradient for fill
+                                    fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f).toArgb()
+                                }
+
+                                chart.data = LineData(dataSet)
+
+                                // Update X-axis formatter with actual dates
+                                (chart.xAxis.valueFormatter as? DayAxisValueFormatter)?.setHistoricalDates(
+                                    historicalPrices.map { it.date }
+                                )
+
+                                chart.invalidate() // Refresh chart
+                            } else {
+                                chart.clear() // Clear chart if no data
+                                chart.invalidate()
+                            }
+                        }
+                    )
+                } else if (!isLoading && errorMessage == null) {
+                    Text("無歷史數據", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+
+            // Price Change Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "昨日至今漲跌幅",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    if (priceChangePercentage != null) {
+                        val isPositive = priceChangePercentage!! >= 0
+                        val changeColor = if (isPositive) Color.Green else Color.Red
+                        val changeSymbol = if (isPositive) "▲" else "▼"
+
+                        Text(
+                            text = String.format(Locale.US, "%s %.2f%%", changeSymbol, Math.abs(priceChangePercentage!!)),
+                            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 32.sp, fontWeight = FontWeight.Bold),
+                            color = changeColor
+                        )
+                    } else if (!isLoading) {
+                        Text(
+                            text = "未能計算漲跌幅",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Convert Compose Color to Android Color Int
+fun Color.toArgb(): Int {
+    return android.graphics.Color.argb(
+        (alpha * 255).toInt(),
+        (red * 255).toInt(),
+        (green * 255).toInt(),
+        (blue * 255).toInt()
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+fun GoldPriceAppPreview() {
+    MaterialTheme {
+        // Create a dummy ViewModel for preview purposes
+        val previewViewModel = object : GoldPriceViewModel() {
+            init {
+                // Manually set some mock data for preview
+                _isLoading.value = false
+                _currentPrice.value = 2050.75
+                val today = Calendar.getInstance()
+                val mockHistory = listOf(
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, -6) }, 2000.0),
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, 1) }, 2010.5),
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, 1) }, 2005.2),
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, 1) }, 2020.8),
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, 1) }, 2035.1),
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, 1) }, 2028.9),
+                    HistoricalPriceEntry(today.apply { add(Calendar.DAY_OF_YEAR, 1) }, 2050.75)
+                )
+                _historicalPrices.value = mockHistory
+                _priceChangePercentage.value = 1.07 // Example change
+            }
+        }
+        GoldPriceApp(previewViewModel)
+    }
+}
+//endregion

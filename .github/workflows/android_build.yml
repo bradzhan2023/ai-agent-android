@@ -16,7 +16,6 @@ jobs:
       - name: Build with Gradle
         run: |
           chmod +x gradlew
-          # 關鍵修正：強制 Kotlin 在進程內編譯，並關閉 Daemon，確保 Stdout 能抓到所有 e: 報錯
           ./gradlew assembleDebug --no-daemon -Pkotlin.compiler.execution.strategy="in-process"
       - name: Upload APK
         uses: actions/upload-artifact@v4

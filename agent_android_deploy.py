@@ -79,7 +79,6 @@ def wait_for_github_action_result():
                 if conclusion == "success":
                     return "success", ""
                 else:
-                    # 抓取 Job 日誌
                     jobs_url = latest_run.get("jobs_url")
                     job_data = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
                     if not job_data.get("jobs"): return "failure", "無法取得 Job 資訊"
@@ -90,15 +89,11 @@ def wait_for_github_action_result():
                     
                     if log_resp.status_code == 200:
                         full_log = log_resp.text
-                        
-                        # 關鍵優化：如果能定位到 Kotlin 編譯任務，就截取該段落之後的內容
-                        # 這能過濾掉數千行的 "Transforming jar..." 廢話
                         if "> Task :app:compileDebugKotlin" in full_log:
                             relevant_log = full_log.split("> Task :app:compileDebugKotlin")[-1]
                         else:
-                            relevant_log = full_log[-10000:] # 否則抓取最後一萬字
+                            relevant_log = full_log[-10000:]
                         
-                        # 再次過濾，只取出包含錯誤關鍵字的行
                         lines = relevant_log.split('\n')
                         error_lines = [l for l in lines if "e: " in l or "error:" in l.lower() or "Compilation error" in l]
                         
@@ -148,7 +143,7 @@ include ':app'
 buildscript {
     repositories { google(); mavenCentral() }
     dependencies {
-        # 升級版本以減少環境轉型錯誤
+        // 修正點：將 # 改為 //，避免 Gradle 編譯錯誤
         classpath 'com.android.tools.build:gradle:8.4.0'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
     }
@@ -225,7 +220,6 @@ jobs:
       - name: Build with Gradle
         run: |
           chmod +x gradlew
-          # 關鍵修正：強制 Kotlin 在進程內編譯，並關閉 Daemon，確保 Stdout 能抓到所有 e: 報錯
           ./gradlew assembleDebug --no-daemon -Pkotlin.compiler.execution.strategy="in-process"
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -249,7 +243,6 @@ def developer_agent_android(task, model_id, api_ver):
 
 def push_to_github(task_name, app_code):
     print(f"🚀 同步代碼至 GitHub...")
-    # 移除可能存在的 Markdown 標籤
     clean_code = app_code.replace("```kotlin", "").replace("```", "").strip()
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(clean_code)
     try:
@@ -277,7 +270,6 @@ def auto_fix_loop(task, model_id, api_ver, max_retries=3):
         
         print(f"❌ 編譯失敗，正在請求修復...")
         
-        # 傳送經過過濾後的 Log 給 Gemini
         fix_prompt = (
             f"原任務：{task}\n\n"
             f"--- 這是編譯器噴出的真實錯誤日誌 ---\n{log_output}\n---\n\n"

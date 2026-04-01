@@ -1,9 +1,4 @@
-由於您提供的錯誤日誌中並未包含 `e:` 標註的 Kotlin 編譯錯誤或 `MainActivity.kt` 的具體行號錯誤，我將根據原始任務要求，提供一份完整且符合所有技術限制的 `MainActivity.kt` 程式碼。此程式碼假設您在 `build.gradle` (app module) 中已正確引入 OkHttp、Gson 和 MPAndroidChart 依賴，並且 `activity_main.xml` 佈局文件已包含 `LineChart`、`tvCurrentPrice` 和 `tvPriceChange` 三個元件。
-
-此解決方案模擬了黃金價格的獲取過程，因為免費且無需 API Key 的黃金歷史價格 API 較為稀有。您可以在 `fetchGoldPrices` 函數中替換為真實的 OkHttp API 請求。
-
-
-package com.example.goldpriceapp // 請確保這是您專案的實際套件名稱
+package com.example.goldpriceapp
 
 import android.graphics.Color
 import android.os.Bundle
@@ -12,267 +7,237 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.components.YAxis // 完整匯入 YAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.google.gson.Gson
-import kotlinx.coroutines.*
-import okhttp3.*
+import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.IOException
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
-import java.util.*
-import kotlin.math.abs
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+
+// 數據模型用於解析 API 回應
+data class GoldPriceResponse(
+    @SerializedName("currentPriceUsdPerOz") val currentPriceUsdPerOz: Double,
+    @SerializedName("prices") val prices: List<PriceEntry>
+)
+
+data class PriceEntry(
+    @SerializedName("date") val date: String, // 例如: "YYYY-MM-DD"
+    @SerializedName("price") val price: Double
+)
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var lineChart: LineChart
-    private lateinit var tvCurrentPrice: TextView
-    private lateinit var tvPriceChange: TextView
+    private lateinit var currentPriceTextView: TextView
+    private lateinit var priceChangeTextView: TextView
+    private lateinit var goldPriceChart: LineChart
 
-    // OkHttpClient 和 Gson 用於 API 請求和 JSON 解析
-    private val okHttpClient = OkHttpClient()
+    // 初始化 OkHttpClient，設定超時時間
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .build()
     private val gson = Gson()
-    // 使用 CoroutineScope 管理非同步任務，並在 Activity 銷毀時取消
-    private val coroutineScope = CoroutineScope(Dispatchers.Main + Job())
 
-    // 數據類別：單一黃金價格點
-    data class GoldPrice(val timestamp: Long, val price: Double)
-
-    // 數據類別：模擬的 API 回應結構 (如果實際串接 API)
-    data class GoldApiResponse(val prices: List<GoldPrice>)
+    // 儲存歷史日期，用於 X 軸標籤顯示
+    private val historicalDates = mutableListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 確保 activity_main.xml 存在且包含以下 ID 的元件: lineChart, tvCurrentPrice, tvPriceChange
-        setContentView(R.layout.activity_main)
+        setContentView(R.layout.activity_main) // 假設佈局檔案為 activity_main.xml
 
-        // 初始化佈局元件
-        lineChart = findViewById(R.id.lineChart)
-        tvCurrentPrice = findViewById(R.id.tvCurrentPrice)
-        tvPriceChange = findViewById(R.id.tvPriceChange)
+        // 初始化 UI 元件
+        currentPriceTextView = findViewById(R.id.currentPriceTextView)
+        priceChangeTextView = findViewById(R.id.priceChangeTextView)
+        goldPriceChart = findViewById(R.id.goldPriceChart)
 
-        setupChart()      // 設定圖表基本屬性
-        fetchGoldPrices() // 獲取黃金價格數據
+        // 啟動資料獲取
+        fetchGoldPrices()
     }
 
-    /**
-     * 設定 MPAndroidChart 的基本屬性。
-     */
-    private fun setupChart() {
-        lineChart.apply {
-            description.isEnabled = false // 禁用圖表描述
-            setTouchEnabled(true)       // 啟用觸控手勢
-            setPinchZoom(true)          // 啟用雙指縮放
-            setDrawGridBackground(false) // 不繪製網格背景
-
-            xAxis.apply {
-                position = XAxis.XAxisPosition.BOTTOM // X 軸位於底部
-                setDrawGridLines(false)               // 不繪製 X 軸網格線
-                setDrawAxisLine(true)                 // 繪製 X 軸線
-                granularity = 1f                      // 設置 X 軸值的最小間隔，確保每個日期都能顯示
-                valueFormatter = DateValueFormatter() // 使用自定義格式化器來顯示日期
-                labelRotationAngle = -45f             // 旋轉 X 軸標籤以提高可讀性
-            }
-
-            axisLeft.apply {
-                setDrawGridLines(true)     // 繪製 Y 軸網格線
-                setDrawAxisLine(true)      // 繪製 Y 軸線
-                valueFormatter = PriceValueFormatter() // 使用自定義格式化器來顯示價格
-            }
-
-            axisRight.isEnabled = false // 禁用右側 Y 軸
-            legend.isEnabled = false    // 禁用圖例
-            animateX(1500)             // 在 X 軸上執行動畫，持續 1.5 秒
-        }
-    }
-
-    /**
-     * 使用 OkHttp 獲取黃金價格。此處為模擬 API 請求。
-     * 在真實應用中，您將替換為實際的 OkHttp 請求到外部 API。
-     */
     private fun fetchGoldPrices() {
-        coroutineScope.launch(Dispatchers.IO) { // 在 IO 執行緒中執行網路操作
+        // 使用 CoroutineScope 在 IO 執行緒中執行網路請求
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                // --- 模擬 API 請求 ---
-                // 在實際應用中，您會在這裡構建 Request 並執行 call.execute() 或 enqueue()
+                // *** 模擬網路延遲和 API 回應 ***
+                // 在真實應用中，請將以下模擬內容替換為實際的 API 請求
+                val mockApiResponse = """
+                    {
+                      "currentPriceUsdPerOz": 2350.75,
+                      "prices": [
+                        {"date": "2024-03-26", "price": 2200.50},
+                        {"date": "2024-03-27", "price": 2210.25},
+                        {"date": "2024-03-28", "price": 2230.10},
+                        {"date": "2024-03-29", "price": 2250.80},
+                        {"date": "2024-03-30", "price": 2245.90},
+                        {"date": "2024-03-31", "price": 2300.30},
+                        {"date": "2024-04-01", "price": 2350.75}
+                      ]
+                    }
+                """.trimIndent()
+
+                // *** 真實 API 請求的範例 (需替換 URL 和可能存在的 API Key) ***
                 /*
                 val request = Request.Builder()
-                    .url("YOUR_GOLD_API_ENDPOINT") // 替換為實際的 API 端點
+                    .url("YOUR_GOLD_API_ENDPOINT_HERE?days=7") // 替換為實際的 API 端點
                     .build()
 
-                val response = okHttpClient.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string()
-                    val apiResponse = gson.fromJson(responseBody, GoldApiResponse::class.java)
-                    val simulatedPrices = apiResponse.prices
-                    // ... 處理數據
-                } else {
-                    Log.e("MainActivity", "API Error: ${response.code} - ${response.message}")
-                    // ... 處理錯誤
-                }
-                */
+                val response = httpClient.newCall(request).execute()
 
-                // 此處為模擬數據生成，模擬最近 7 天的黃金價格
-                val simulatedPrices = generateSimulatedGoldPrices(7) // 獲取 7 天的價格數據
-
-                // 獲取當前價格和昨日價格用於計算漲跌幅
-                val currentPrice = simulatedPrices.lastOrNull()?.price ?: 0.0
-                val yesterdayPrice = simulatedPrices.dropLast(1).lastOrNull()?.price ?: currentPrice
-
-                withContext(Dispatchers.Main) { // 切換回主執行緒更新 UI
-                    updateUI(simulatedPrices, currentPrice, yesterdayPrice)
+                if (!response.isSuccessful) {
+                    throw IOException("Unexpected code ${response.code}")
                 }
 
-            } catch (e: IOException) {
-                Log.e("MainActivity", "Error fetching gold prices: ${e.message}")
+                val responseBody = response.body?.string()
+                if (responseBody == null) {
+                    throw IOException("Empty response body")
+                }
+                val goldData = gson.fromJson(responseBody, GoldPriceResponse::class.java)
+                 */
+                // 目前使用模擬數據
+                val goldData = gson.fromJson(mockApiResponse, GoldPriceResponse::class.java)
+
+                // 切換回主執行緒更新 UI
                 withContext(Dispatchers.Main) {
-                    tvCurrentPrice.text = "錯誤：無法獲取價格"
-                    tvPriceChange.text = ""
+                    updateUI(goldData)
                 }
+
             } catch (e: Exception) {
-                Log.e("MainActivity", "An unexpected error occurred: ${e.message}", e)
+                // 記錄錯誤日誌
+                Log.e("MainActivity", "Error fetching gold prices: ${e.message}", e)
+                // 在主執行緒更新 UI 顯示錯誤訊息
                 withContext(Dispatchers.Main) {
-                    tvCurrentPrice.text = "錯誤：發生未知問題"
-                    tvPriceChange.text = ""
+                    currentPriceTextView.text = "錯誤: 無法載入價格"
+                    priceChangeTextView.text = ""
                 }
             }
         }
     }
 
-    /**
-     * 生成模擬的黃金價格數據，包含指定天數的歷史數據。
-     * @param days 要生成的歷史天數。
-     * @return 包含 GoldPrice 對象的列表。
-     */
-    private fun generateSimulatedGoldPrices(days: Int): List<GoldPrice> {
-        val prices = mutableListOf<GoldPrice>()
-        val calendar = Calendar.getInstance()
-        calendar.add(Calendar.DAY_OF_YEAR, -days + 1) // 從 (days-1) 天前開始
+    private fun updateUI(goldData: GoldPriceResponse) {
+        // 1. 更新當前價格
+        val currentPrice = goldData.currentPriceUsdPerOz
+        currentPriceTextView.text = String.format(Locale.US, "%.2f USD/oz", currentPrice)
 
-        var lastPrice = 1800.0 // 設定一個初始基準價格
-        for (i in 0 until days) {
-            val timestamp = calendar.timeInMillis
-            // 模擬價格波動：每日 +/- 0.5% 到 1.5%
-            val changeFactor = (Math.random() * 0.03 - 0.015) // 範圍從 -1.5% 到 +1.5%
-            val newPrice = lastPrice * (1 + changeFactor)
-            // 將價格格式化為兩位小數
-            lastPrice = String.format(Locale.US, "%.2f", newPrice).toDouble()
-            prices.add(GoldPrice(timestamp, lastPrice))
-            calendar.add(Calendar.DAY_OF_YEAR, 1) // 移動到下一天
+        // 2. 計算並顯示漲跌幅
+        // 需要至少兩天的數據才能計算漲跌幅 (最新價格 vs. 前一天價格)
+        if (goldData.prices.size >= 2) {
+            val latestPrice = goldData.prices.last().price
+            val previousDayPrice = goldData.prices[goldData.prices.size - 2].price
+
+            val change = latestPrice - previousDayPrice
+            val percentageChange = (change / previousDayPrice) * 100
+
+            val decimalFormat = DecimalFormat("0.00")
+            val changeText = if (change >= 0) {
+                priceChangeTextView.setTextColor(Color.GREEN) // 上漲顯示綠色
+                "+${decimalFormat.format(percentageChange)}%"
+            } else {
+                priceChangeTextView.setTextColor(Color.RED) // 下跌顯示紅色
+                "${decimalFormat.format(percentageChange)}%"
+            }
+            priceChangeTextView.text = changeText
+        } else {
+            priceChangeTextView.text = "N/A"
+            priceChangeTextView.setTextColor(Color.GRAY)
         }
-        return prices
+
+        // 3. 使用歷史數據填充圖表
+        setupChart(goldData.prices)
     }
 
-    /**
-     * 更新 UI 上的黃金價格、漲跌幅和圖表。
-     * @param historicalPrices 歷史價格數據列表。
-     * @param currentPrice 當前黃金價格。
-     * @param yesterdayPrice 昨日黃金價格 (用於計算漲跌幅)。
-     */
-    private fun updateUI(
-        historicalPrices: List<GoldPrice>,
-        currentPrice: Double,
-        yesterdayPrice: Double
-    ) {
-        val priceFormat = DecimalFormat("#,##0.00")
-        tvCurrentPrice.text = "目前黃金價格: $${priceFormat.format(currentPrice)} USD/oz"
-
-        val priceChangeAbsolute = currentPrice - yesterdayPrice
-        val priceChangePercentage = if (yesterdayPrice != 0.0) (priceChangeAbsolute / yesterdayPrice) * 100 else 0.0
-
-        val changeText = StringBuilder("漲跌幅: ")
-        when {
-            priceChangeAbsolute > 0 -> {
-                changeText.append("+")
-                tvPriceChange.setTextColor(Color.parseColor("#4CAF50")) // 綠色
-            }
-            priceChangeAbsolute < 0 -> {
-                tvPriceChange.setTextColor(Color.parseColor("#F44336")) // 紅色
-            }
-            else -> {
-                tvPriceChange.setTextColor(Color.GRAY)
-            }
-        }
-        changeText.append("${priceFormat.format(priceChangeAbsolute)} USD (${priceFormat.format(priceChangePercentage)}%)")
-        tvPriceChange.text = changeText.toString()
-
-        updateChartData(historicalPrices)
-    }
-
-    /**
-     * 更新圖表數據並重新繪製。
-     * @param historicalPrices 包含時間戳和價格的歷史數據列表。
-     */
-    private fun updateChartData(historicalPrices: List<GoldPrice>) {
+    private fun setupChart(prices: List<PriceEntry>) {
+        historicalDates.clear() // 清除之前的日期數據
         val entries = ArrayList<Entry>()
-        // 將歷史數據轉換為 MPAndroidChart 的 Entry 對象
-        historicalPrices.forEachIndexed { index, goldPrice ->
-            // 使用 index 作為 X 軸的值，ValueFormatter 會將其轉換為日期
-            entries.add(Entry(index.toFloat(), goldPrice.price.toFloat()))
+        for ((index, priceEntry) in prices.withIndex()) {
+            // Entry(X軸位置, Y軸數值)
+            entries.add(Entry(index.toFloat(), priceEntry.price.toFloat()))
+            historicalDates.add(priceEntry.date) // 儲存日期字串用於 X 軸標籤
         }
 
-        val dataSet = LineDataSet(entries, "黃金價格歷史").apply {
-            color = Color.parseColor("#FFD700") // 黃金顏色
-            setCircleColor(Color.parseColor("#FFD700"))
-            lineWidth = 2f
-            circleRadius = 4f
-            setDrawCircleHole(false) // 不繪製圓圈中的空洞
-            valueTextSize = 0f       // 隱藏圖表上的數據點值標籤
-            mode = LineDataSet.Mode.LINEAR // 線條模式 (可選 CUBIC_BEZIER, STEPPED 等)
-            setDrawFilled(true)      // 繪製線條下方填充區域
-            fillColor = Color.parseColor("#33FFD700") // 半透明黃金色填充
-            fillAlpha = 85           // 填充顏色透明度
-        }
+        val dataSet = LineDataSet(entries, "黃金價格 (USD/oz)")
+        dataSet.color = Color.BLUE
+        dataSet.valueTextColor = Color.BLACK
+        dataSet.setDrawCircles(true) // 顯示數據點圓圈
+        dataSet.setCircleColor(Color.BLUE)
+        dataSet.lineWidth = 2f
+        dataSet.valueTextSize = 10f
+        dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER // 平滑曲線
+        dataSet.setDrawValues(false) // 不在曲線上顯示每個數據點的數值
 
         val lineData = LineData(dataSet)
-        lineChart.data = lineData
+        goldPriceChart.data = lineData
 
-        // 重新設定 X 軸的 ValueFormatter，並傳入所有時間戳以供正確格式化日期
-        lineChart.xAxis.valueFormatter = DateValueFormatter(historicalPrices.map { it.timestamp })
-        lineChart.xAxis.granularity = 1f // 確保每個數據點都有標籤
+        // 配置 X 軸
+        val xAxis = goldPriceChart.xAxis
+        xAxis.position = XAxis.XAxisPosition.BOTTOM // X 軸位於底部
+        xAxis.setDrawGridLines(false) // 不繪製網格線
+        xAxis.granularity = 1f // 最小間隔為 1 (每個數據點一個標籤)
+        // 使用自定義的 DateAxisValueFormatter 處理 X 軸日期標籤
+        xAxis.valueFormatter = DateAxisValueFormatter(historicalDates)
+        xAxis.labelRotationAngle = -45f // 旋轉標籤以避免重疊
 
-        lineChart.notifyDataSetChanged() // 通知圖表數據已更改
-        lineChart.invalidate()           // 重新繪製圖表
+        // 配置左側 Y 軸
+        val leftYAxis = goldPriceChart.axisLeft
+        leftYAxis.setDrawGridLines(true) // 繪製網格線
+        // 使用自定義的 PriceYAxisValueFormatter 處理 Y 軸價格標籤
+        leftYAxis.valueFormatter = PriceYAxisValueFormatter()
+        leftYAxis.setStartAtZero(false) // 不強制 Y 軸從 0 開始，以更好地顯示價格波動
+
+        // 禁用右側 Y 軸
+        val rightYAxis = goldPriceChart.axisRight
+        rightYAxis.isEnabled = false
+
+        // 圖表通用設置
+        goldPriceChart.description.isEnabled = false // 不顯示描述標籤
+        goldPriceChart.legend.isEnabled = true // 顯示圖例
+        goldPriceChart.setTouchEnabled(true) // 允許觸摸互動 (縮放、拖動)
+        goldPriceChart.setPinchZoom(true) // 允許雙指縮放
+        goldPriceChart.setNoDataText("正在載入數據...") // 無數據時顯示的文字
+
+        goldPriceChart.invalidate() // 刷新圖表以顯示最新數據
     }
 
-    /**
-     * 自定義 ValueFormatter，用於格式化 X 軸的日期標籤。
-     * 嚴禁使用已棄用的 getAxisLabel 函數，一律使用 valueFormatter 來處理座標軸標籤。
-     * 此處 ValueFormatter 的 getAxisLabel 方法是正確且未被棄用的。
-     */
-    inner class DateValueFormatter(private val timestamps: List<Long> = emptyList()) : ValueFormatter() {
-        private val dateFormat = SimpleDateFormat("MMM dd", Locale.getDefault())
+    // 自定義 ValueFormatter，用於格式化 X 軸日期標籤
+    class DateAxisValueFormatter(private val dates: List<String>) : ValueFormatter() {
+        private val inputDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        private val outputDateFormat = SimpleDateFormat("MM/dd", Locale.US) // 輸出格式為 月/日
 
-        override fun getAxisLabel(value: Float, axis: com.github.mikephil.charting.components.AxisBase?): String {
-            val index = value.toInt() // MPAndroidChart 傳遞的是 Entry 的 X 值 (我們的索引)
-            return if (index >= 0 && index < timestamps.size) {
-                dateFormat.format(Date(timestamps[index])) // 將時間戳轉換為日期字串
+        override fun getAxisLabel(value: Float, axis: XAxis?): String {
+            val index = value.toInt()
+            return if (index >= 0 && index < dates.size) {
+                try {
+                    val date: Date? = inputDateFormat.parse(dates[index])
+                    date?.let { outputDateFormat.format(it) } ?: dates[index]
+                } catch (e: Exception) {
+                    Log.e("DateFormatter", "Error parsing date: ${dates[index]}", e)
+                    dates[index] // 解析失敗時返回原始字串
+                }
             } else {
-                "" // 超出範圍則返回空字串
+                "" // 超出範圍返回空字串
             }
         }
     }
 
-    /**
-     * 自定義 ValueFormatter，用於格式化 Y 軸的價格標籤。
-     * 嚴禁使用已棄用的 getAxisLabel 函數，一律使用 valueFormatter 來處理座標軸標籤。
-     * 此處 ValueFormatter 的 getAxisLabel 方法是正確且未被棄用的。
-     */
-    inner class PriceValueFormatter : ValueFormatter() {
-        private val decimalFormat = DecimalFormat("#,##0.00") // 格式化為兩位小數
+    // 自定義 ValueFormatter，用於格式化 Y 軸價格標籤
+    class PriceYAxisValueFormatter : ValueFormatter() {
+        private val decimalFormat = DecimalFormat("0.00") // 價格格式化為兩位小數
 
-        override fun getAxisLabel(value: Float, axis: com.github.mikephil.charting.components.AxisBase?): String {
-            return "$${decimalFormat.format(value)}" // 在價格前加上貨幣符號
+        override fun getAxisLabel(value: Float, axis: YAxis?): String {
+            return decimalFormat.format(value)
         }
-    }
-
-    /**
-     * Activity 銷毀時取消所有協程，避免記憶體洩漏。
-     */
-    override fun onDestroy() {
-        super.onDestroy()
-        coroutineScope.cancel() // 取消所有由 coroutineScope 啟動的協程
     }
 }

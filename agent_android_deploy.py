@@ -79,7 +79,7 @@ def wait_for_github_action_result():
                 if conclusion == "success":
                     return "success", ""
                 else:
-                    # 關鍵優化：抓取 Job 日誌
+                    # 抓取 Job 日誌
                     jobs_url = latest_run.get("jobs_url")
                     job_data = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
                     if not job_data.get("jobs"): return "failure", "無法取得 Job 資訊"
@@ -90,15 +90,22 @@ def wait_for_github_action_result():
                     
                     if log_resp.status_code == 200:
                         full_log = log_resp.text
-                        # 優化：我們不只抓最後，我們要尋找包含 "e:" (Kotlin error) 的區塊
-                        # Android 編譯錯誤通常帶有 "e: " 字樣
-                        lines = full_log.split('\n')
-                        error_lines = [l for l in lines if "e: " in l or "error:" in l.lower()]
+                        
+                        # 關鍵優化：如果能定位到 Kotlin 編譯任務，就截取該段落之後的內容
+                        # 這能過濾掉數千行的 "Transforming jar..." 廢話
+                        if "> Task :app:compileDebugKotlin" in full_log:
+                            relevant_log = full_log.split("> Task :app:compileDebugKotlin")[-1]
+                        else:
+                            relevant_log = full_log[-10000:] # 否則抓取最後一萬字
+                        
+                        # 再次過濾，只取出包含錯誤關鍵字的行
+                        lines = relevant_log.split('\n')
+                        error_lines = [l for l in lines if "e: " in l or "error:" in l.lower() or "Compilation error" in l]
                         
                         if error_lines:
-                            return "failure", "\n".join(error_lines[-20:]) # 回傳前 20 個錯誤行
+                            return "failure", "\n".join(error_lines)
                         else:
-                            return "failure", full_log[-5000:] # 沒找到關鍵字就給最後 5000 字
+                            return "failure", relevant_log
                     else:
                         return "failure", f"無法下載 Log, HTTP {log_resp.status_code}"
             
@@ -141,7 +148,8 @@ include ':app'
 buildscript {
     repositories { google(); mavenCentral() }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.2.2'
+        # 升級版本以減少環境轉型錯誤
+        classpath 'com.android.tools.build:gradle:8.4.0'
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
     }
 }
@@ -217,8 +225,8 @@ jobs:
       - name: Build with Gradle
         run: |
           chmod +x gradlew
-          # 關鍵修正：使用 --no-daemon 並強制顯示錯誤詳情
-          ./gradlew assembleDebug --stacktrace --info
+          # 關鍵修正：強制 Kotlin 在進程內編譯，並關閉 Daemon，確保 Stdout 能抓到所有 e: 報錯
+          ./gradlew assembleDebug --no-daemon -Pkotlin.compiler.execution.strategy="in-process"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -235,13 +243,15 @@ def developer_agent_android(task, model_id, api_ver):
         "1. 使用 Material3 Compose。\n"
         "2. 必須包含所有需要的 Import。\n"
         "3. 嚴禁使用 getAxisLabel (MPAndroidChart)，請改用 valueFormatter。\n"
-        "4. 確保代碼可以直接編譯，不要 Markdown。"
+        "4. 確保代碼可以直接編譯，不要包含 Markdown 代碼塊標籤，直接輸出代碼內容。"
     )
     return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
 
 def push_to_github(task_name, app_code):
     print(f"🚀 同步代碼至 GitHub...")
-    with open(APP_FILE, "w", encoding="utf-8") as f: f.write(app_code)
+    # 移除可能存在的 Markdown 標籤
+    clean_code = app_code.replace("```kotlin", "").replace("```", "").strip()
+    with open(APP_FILE, "w", encoding="utf-8") as f: f.write(clean_code)
     try:
         repo = Repo(".")
         if not os.path.exists(".git"): repo = Repo.init(".")
@@ -267,11 +277,12 @@ def auto_fix_loop(task, model_id, api_ver, max_retries=3):
         
         print(f"❌ 編譯失敗，正在請求修復...")
         
-        # 關鍵優化：告訴 Gemini 這是真正的編譯報錯
+        # 傳送經過過濾後的 Log 給 Gemini
         fix_prompt = (
             f"原任務：{task}\n\n"
             f"--- 這是編譯器噴出的真實錯誤日誌 ---\n{log_output}\n---\n\n"
-            f"請根據上述錯誤內容（特別是標註為 'e:' 的行）修復 MainActivity.kt。"
+            f"請根據上述錯誤內容（特別是標註為 'e:' 的行或 MainActivity.kt 的報錯行號）修復代碼。"
+            f"僅輸出完整的 MainActivity.kt 代碼。"
         )
         code = call_gemini_api(fix_prompt, model_id, api_ver)
         push_to_github(f"Auto-fix Attempt {i+1}", code)
@@ -279,12 +290,16 @@ def auto_fix_loop(task, model_id, api_ver, max_retries=3):
     return False
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2: exit(1)
+    if len(sys.argv) < 2: 
+        print("使用方式: python agent_android_deploy.py '你的任務描述'")
+        exit(1)
     my_task = sys.argv[1]
     initialize_android_project()
     try:
         model_id, api_ver = get_available_model()
         if auto_fix_loop(my_task, model_id, api_ver):
             print("📝 完成！")
+        else:
+            print("😢 嘗試次數已達上限，請檢查日誌手動調整。")
     except Exception as e:
         print(f"💥 錯誤: {e}")

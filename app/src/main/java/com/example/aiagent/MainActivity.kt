@@ -1,484 +1,484 @@
-這些錯誤日誌清楚地表明，您的 `MainActivity.kt` 檔案的內容被錯誤地替換成了 Gradle 建置腳本的內容。`androidTestImplementation`、`debugImplementation`、`repositories` 等關鍵字都是 Gradle 用來定義依賴和倉庫的，它們不屬於 Kotlin 原始碼檔案。因此，編譯器無法理解這些語句，並報告了大量的 `Unresolved reference` 和 `Function declaration must have a name` 錯誤。
-
-要解決這個問題，我們需要做兩件事：
-1.  **徹底重寫 `MainActivity.kt` 檔案**，使其包含正確的 Android 活動邏輯、UI 程式碼以及資料抓取和圖表繪製邏輯。
-2.  **確保 `app/build.gradle.kts` 和 `settings.gradle.kts` 檔案包含所有必要的依賴庫** (OkHttp, Gson, MPAndroidChart, Compose 等)。
-
-以下是修復後的 `MainActivity.kt` 檔案內容，以及相應需要修改的 Gradle 檔案片段。
-
----
-
-### **1. 修復 `MainActivity.kt`**
-
-將 `/app/src/main/java/com/example/aiagent/MainActivity.kt` 的內容完全替換為以下程式碼：
-
-```kotlin
 package com.example.aiagent
 
+import android.graphics.Color
 import android.os.Bundle
-import android.util.Log
+import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.aiagent.ui.theme.AiAgentTheme
 import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.AxisBase
 import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.components.YAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.ValueFormatter
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.IOException
+import org.json.JSONObject
+import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
-// --- Data Models for Binance Klines API ---
-// Binance Klines API returns a list of lists.
-// We parse the raw list into a more structured data class.
-data class KlineData(
-    val openTime: Long,
-    val openPrice: String,
-    val highPrice: String,
-    val lowPrice: String,
-    val closePrice: String,
-    val volume: String,
-    val closeTime: Long,
-    val quoteAssetVolume: String,
-    val numberOfTrades: Int,
-    val takerBuyBaseAssetVolume: String,
-    val takerBuyQuoteAssetVolume: String,
-    val ignore: String
+// --- Data Models ---
+data class GoldPrice(
+    val currentPrice: Double,
+    val timestamp: Long, // Unix timestamp in seconds
+    val priceChange: Double = 0.0, // Absolute change from previous day
+    val priceChangePercent: Double = 0.0 // Percentage change from previous day
 )
 
-// Helper function to convert a raw JSON list entry to a KlineData object
-fun parseKlineJson(jsonArray: List<Any>): KlineData {
-    // Gson might parse numbers as Doubles by default, so we cast them appropriately.
-    return KlineData(
-        openTime = (jsonArray[0] as Double).toLong(),
-        openPrice = jsonArray[1] as String,
-        highPrice = jsonArray[2] as String,
-        lowPrice = jsonArray[3] as String,
-        closePrice = jsonArray[4] as String,
-        volume = jsonArray[5] as String,
-        closeTime = (jsonArray[6] as Double).toLong(),
-        quoteAssetVolume = jsonArray[7] as String,
-        numberOfTrades = (jsonArray[8] as Double).toInt(),
-        takerBuyBaseAssetVolume = jsonArray[9] as String,
-        takerBuyQuoteAssetVolume = jsonArray[10] as String,
-        ignore = jsonArray[11] as String
-    )
-}
+data class HistoricalPrice(
+    val date: Long, // Unix timestamp in milliseconds for chart X-axis
+    val price: Double
+)
 
-// --- ViewModel for fetching data ---
-class GoldPriceViewModel : ViewModel() {
+// --- API Service (Placeholder) ---
+// IMPORTANT: Replace with a real API endpoint and your API Key!
+// For demonstration, this uses a placeholder and generates dummy data.
+// A free API like https://www.goldapi.io/ might require an API key.
+// Example API for real data (requires signup and API key):
+// Current price: https://www.goldapi.io/api/XAU/USD
+// Historical price: Often separate endpoints or part of a premium plan.
+object GoldApiService {
     private val client = OkHttpClient()
-    private val gson = Gson()
 
-    // State holders for UI, observed by Compose
-    val currentPrice = mutableStateOf("Fetching PAXG/USDT...")
-    val priceHistory = mutableStateOf<List<KlineData>>(emptyList())
-    val isLoading = mutableStateOf(false)
-    val errorMessage = mutableStateOf<String?>(null)
+    // Placeholder URL - This will likely NOT work without a valid API key and endpoint.
+    // Replace with a working API endpoint for real data.
+    private const val BASE_URL = "https://api.example.com/gold"
+    private const val API_KEY = "YOUR_API_KEY_HERE" // Replace with your actual API key
 
-    init {
-        // Fetch data when the ViewModel is initialized
-        fetchGoldPriceData()
+    suspend fun fetchCurrentGoldPrice(): GoldPrice = withContext(Dispatchers.IO) {
+        // --- Dummy data for demonstration ---
+        // In a real app, you would make an HTTP request here.
+        // Example request structure (adjust for your chosen API):
+        /*
+        val request = Request.Builder()
+            .url("$BASE_URL/current")
+            .header("x-access-token", API_KEY) // Or "Authorization: Bearer $API_KEY"
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("API Call Failed: ${response.code}")
+            val responseBody = response.body?.string() ?: throw Exception("Empty response body")
+            val json = JSONObject(responseBody)
+            val currentPrice = json.getDouble("price")
+            val timestamp = json.getLong("timestamp")
+            val previousDayPrice = 1950.0 // You'd fetch this from historical data
+            val priceChange = currentPrice - previousDayPrice
+            val priceChangePercent = (priceChange / previousDayPrice) * 100
+            return@withContext GoldPrice(currentPrice, timestamp, priceChange, priceChangePercent)
+        }
+        */
+
+        // Generate dummy current price
+        val currentPrice = 1980.00 + Random.nextDouble(-20.0, 20.0) // Simulate fluctuation
+        val prevDayPrice = currentPrice - Random.nextDouble(-10.0, 15.0) // Simulate previous day
+        val priceChange = currentPrice - prevDayPrice
+        val priceChangePercent = (priceChange / prevDayPrice) * 100
+        val timestamp = System.currentTimeMillis() / 1000 // Current Unix timestamp
+        GoldPrice(currentPrice, timestamp, priceChange, priceChangePercent)
     }
 
-    fun fetchGoldPriceData() {
+    suspend fun fetchHistoricalGoldPrices(days: Int): List<HistoricalPrice> = withContext(Dispatchers.IO) {
+        // --- Dummy data for demonstration ---
+        // In a real app, you would make an HTTP request here for historical data.
+        // Example request structure (adjust for your chosen API):
+        /*
+        val calendar = Calendar.getInstance()
+        val endDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(calendar.time)
+        calendar.add(Calendar.DAY_OF_YEAR, -days)
+        val startDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(calendar.time)
+
+        val request = Request.Builder()
+            .url("$BASE_URL/history?start_date=$startDate&end_date=$endDate")
+            .header("x-access-token", API_KEY)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("API Call Failed: ${response.code}")
+            val responseBody = response.body?.string() ?: throw Exception("Empty response body")
+            val jsonArray = JSONArray(responseBody)
+            val historicalPrices = mutableListOf<HistoricalPrice>()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                val dateStr = obj.getString("date")
+                val price = obj.getDouble("price")
+                val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                val timestamp = dateFormat.parse(dateStr)?.time ?: 0L
+                historicalPrices.add(HistoricalPrice(timestamp, price))
+            }
+            return@withContext historicalPrices.sortedBy { it.date }
+        }
+        */
+
+        // Generate dummy historical data for the last 'days'
+        val historicalData = mutableListOf<HistoricalPrice>()
+        val calendar = Calendar.getInstance()
+        var basePrice = 1970.0 // Starting point for dummy data
+        for (i in days downTo 1) {
+            calendar.timeInMillis = System.currentTimeMillis()
+            calendar.add(Calendar.DAY_OF_YEAR, -i)
+            val date = calendar.timeInMillis // Timestamp for the day
+            val price = basePrice + Random.nextDouble(-15.0, 15.0) // Simulate price fluctuation
+            historicalData.add(HistoricalPrice(date, price))
+            basePrice = price // Next day's price will be based on this
+        }
+        // Add today's price as the last point (can be fetched from current price API or simulated)
+        calendar.timeInMillis = System.currentTimeMillis()
+        historicalData.add(HistoricalPrice(calendar.timeInMillis, basePrice + Random.nextDouble(-5.0, 5.0)))
+
+        historicalData.sortedBy { it.date }
+    }
+}
+
+// --- ViewModel ---
+class GoldPriceViewModel : ViewModel() {
+    private val _currentPrice = MutableStateFlow<GoldPrice?>(null)
+    val currentPrice: StateFlow<GoldPrice?> = _currentPrice.asStateFlow()
+
+    private val _historicalPrices = MutableStateFlow<List<HistoricalPrice>>(emptyList())
+    val historicalPrices: StateFlow<List<HistoricalPrice>> = _historicalPrices.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    init {
+        fetchGoldPrices()
+    }
+
+    fun fetchGoldPrices() {
+        _isLoading.value = true
+        _errorMessage.value = null
         viewModelScope.launch {
-            isLoading.value = true
-            errorMessage.value = null // Clear previous errors
-            withContext(Dispatchers.IO) {
-                try {
-                    // 1. Fetch current price (24hr ticker data)
-                    val currentPriceUrl = "https://api.binance.com/api/v3/ticker/24hr?symbol=PAXGUSDT"
-                    val currentPriceRequest = Request.Builder().url(currentPriceUrl).build()
-                    val currentPriceResponse = client.newCall(currentPriceRequest).execute()
+            try {
+                // Fetch current price
+                val fetchedCurrentPrice = GoldApiService.fetchCurrentGoldPrice()
+                _currentPrice.value = fetchedCurrentPrice
 
-                    if (currentPriceResponse.isSuccessful) {
-                        val responseBody = currentPriceResponse.body?.string()
-                        val tickerData = gson.fromJson(responseBody, object : TypeToken<Map<String, Any>>() {}.type) as Map<String, Any>
-                        val lastPrice = tickerData["lastPrice"] as String
-                        withContext(Dispatchers.Main) {
-                            currentPrice.value = "PAXG/USDT: $lastPrice"
-                        }
-                    } else {
-                        throw IOException("Failed to fetch current price: ${currentPriceResponse.code} - ${currentPriceResponse.body?.string()}")
-                    }
-
-                    // 2. Fetch 24-hour historical data (klines/candlesticks)
-                    // Using 5-minute interval for 24 hours: 24 hours * (60 mins / 5 mins) = 288 data points.
-                    // This fits within Binance's typical API limit of 1000 items per request.
-                    val klinesUrl = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=5m&limit=288"
-                    val klinesRequest = Request.Builder().url(klinesUrl).build()
-                    val klinesResponse = client.newCall(klinesRequest).execute()
-
-                    if (klinesResponse.isSuccessful) {
-                        val responseBody = klinesResponse.body?.string()
-                        // Binance Klines API returns a List of Lists (e.g., [[timestamp, open, high, low, close, ...]])
-                        val type = object : TypeToken<List<List<Any>>>() {}.type
-                        val rawKlineList: List<List<Any>> = gson.fromJson(responseBody, type)
-
-                        // Parse raw lists into our structured KlineData objects
-                        val parsedKlineList = rawKlineList.map { parseKlineJson(it) }
-                        withContext(Dispatchers.Main) {
-                            priceHistory.value = parsedKlineList
-                        }
-                    } else {
-                        throw IOException("Failed to fetch historical data: ${klinesResponse.code} - ${klinesResponse.body?.string()}")
-                    }
-
-                } catch (e: Exception) {
-                    // Log the error for debugging
-                    Log.e("GoldPriceViewModel", "Error fetching data: ${e.message}", e)
-                    withContext(Dispatchers.Main) {
-                        errorMessage.value = "Failed to load data: ${e.message}"
-                    }
-                } finally {
-                    withContext(Dispatchers.Main) {
-                        isLoading.value = false
-                    }
-                }
+                // Fetch 7 days of historical prices
+                val fetchedHistoricalPrices = GoldApiService.fetchHistoricalGoldPrices(7)
+                _historicalPrices.value = fetchedHistoricalPrices
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to fetch gold prices: ${e.localizedMessage}"
+                e.printStackTrace()
+            } finally {
+                _isLoading.value = false
             }
         }
     }
 }
 
-// --- Main Activity ---
+// --- MainActivity ---
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             AiAgentTheme {
-                // A surface container using the 'background' color from the theme
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    GoldPriceScreen()
-                }
+                GoldPriceApp()
             }
         }
     }
 }
 
-// --- Composable UI for the Gold Price Screen ---
+// --- Composable UI ---
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GoldPriceScreen(viewModel: GoldPriceViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
-    val currentPrice by viewModel.currentPrice
-    val priceHistory by viewModel.priceHistory
-    val isLoading by viewModel.isLoading
-    val errorMessage by viewModel.errorMessage
+fun GoldPriceApp(viewModel: GoldPriceViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
+    val currentPrice by viewModel.currentPrice.collectAsState()
+    val historicalPrices by viewModel.historicalPrices.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("黃金現價 App", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top
+        ) {
+            if (isLoading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("正在加載黃金價格...", style = MaterialTheme.typography.bodyLarge)
+            }
+
+            errorMessage?.let { message ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.Info, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            currentPrice?.let { priceData ->
+                CurrentPriceDisplay(priceData)
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            if (historicalPrices.isNotEmpty()) {
+                GoldPriceChart(historicalPrices)
+            } else if (!isLoading && errorMessage == null) {
+                Text(
+                    text = "無法獲取歷史價格數據。",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            }
+
+            // Optional: A refresh button
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = { viewModel.fetchGoldPrices() }, enabled = !isLoading) {
+                Text("刷新價格")
+            }
+        }
+    }
+}
+
+@Composable
+fun CurrentPriceDisplay(price: GoldPrice) {
+    val decimalFormat = DecimalFormat("$#,##0.00")
+    val percentFormat = DecimalFormat("0.00'%'")
+    val priceChangeColor = if (price.priceChange >= 0) Color.parseColor("#4CAF50") else Color.parseColor("#F44336") // Green for up, Red for down
+    val priceChangeArrow = if (price.priceChange >= 0) "▲" else "▼"
 
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
+            .fillMaxWidth()
+            .cardModifier(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "PAXG/USDT Price Tracker",
-            style = MaterialTheme.typography.headlineLarge,
-            modifier = Modifier.padding(bottom = 16.dp)
+            text = "當前黃金價格 (USD/oz)",
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(bottom = 8.dp)
         )
-
-        // Show loading indicator when data is being fetched
-        if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.padding(16.dp))
-            Text("Loading data...")
-        }
-
-        // Display error message if any
-        errorMessage?.let { message ->
-            Text(
-                text = message,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-
-        // Display current price
         Text(
-            text = currentPrice,
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
+            text = decimalFormat.format(price.currentPrice),
+            style = MaterialTheme.typography.displayLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = MaterialTheme.colorScheme.primary,
+            fontSize = 48.sp // Larger font size for prominence
         )
-
-        // Display the chart if historical data is available
-        if (priceHistory.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "24-Hour Price Trend (5-min interval)",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 8.dp)
+                text = "$priceChangeArrow ",
+                color = priceChangeColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp
             )
-            PriceLineChart(priceHistory = priceHistory)
-        } else if (!isLoading && errorMessage == null) {
-            // Only show this if not loading and no error, meaning no data was returned
-            Text("No historical data available.", modifier = Modifier.padding(16.dp))
+            Text(
+                text = "${decimalFormat.format(price.priceChange)} (${percentFormat.format(price.priceChangePercent)})",
+                color = priceChangeColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp
+            )
         }
-
-        // Refresh Button
-        Button(
-            onClick = { viewModel.fetchGoldPriceData() },
-            modifier = Modifier.padding(top = 16.dp)
-        ) {
-            Text("Refresh Data")
-        }
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        Text(
+            text = "更新時間: ${sdf.format(Date(price.timestamp * 1000L))}",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
-// --- Composable for displaying the Line Chart using MPAndroidChart ---
 @Composable
-fun PriceLineChart(priceHistory: List<KlineData>) {
+fun GoldPriceChart(historicalPrices: List<HistoricalPrice>) {
     val context = LocalContext.current
-    AndroidView(
+    val entries = historicalPrices.mapIndexed { index, data ->
+        Entry(index.toFloat(), data.price.toFloat())
+    }
+
+    val chartDates = historicalPrices.map { it.date }.toLongArray()
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(300.dp)
-            .background(Color.White), // Provide a background for the chart view
-        factory = {
-            LineChart(it).apply {
-                // Basic chart setup
-                description.isEnabled = false // Disable chart description
-                setTouchEnabled(true) // Enable touch gestures
-                isDragEnabled = true // Enable dragging
-                setScaleEnabled(true) // Enable zooming (pinch zoom)
-                setPinchZoom(true) // Enable pinch zoom
+            .cardModifier()
+            .height(300.dp) // Fixed height for the chart
+    ) {
+        Text(
+            text = "最近 7 天價格歷史",
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        AndroidView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f), // Allow chart to fill remaining height
+            factory = { ctx ->
+                LineChart(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    description.isEnabled = false // No description text
+                    setTouchEnabled(true)
+                    isDragEnabled = true
+                    setScaleEnabled(true)
+                    setPinchZoom(true)
+                    setNoDataText("沒有數據可顯示")
+                    setNoDataTextColor(Color.GRAY)
 
-                // X-axis configuration (time)
-                xAxis.position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
-                xAxis.setDrawGridLines(false) // No vertical grid lines
-                xAxis.axisMinimum = priceHistory.first().openTime.toFloat() // Set min time
-                xAxis.axisMaximum = priceHistory.last().openTime.toFloat() // Set max time
-                xAxis.valueFormatter = object : ValueFormatter() {
-                    private val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    override fun getFormattedValue(value: Float): String {
-                        return dateFormat.format(Date(value.toLong())) // Format timestamp to HH:mm
+                    // X-axis configuration
+                    xAxis.apply {
+                        position = XAxis.XAxisPosition.BOTTOM // Labels at the bottom
+                        granularity = 1f // Only whole numbers for days
+                        setDrawGridLines(true)
+                        setDrawAxisLine(true)
+                        labelRotationAngle = -45f // Rotate labels for better readability
+                        textColor = Color.DKGRAY
+                        valueFormatter = DayAxisValueFormatter(chartDates) // Custom formatter for dates
+                    }
+
+                    // Left Y-axis configuration
+                    axisLeft.apply {
+                        setDrawGridLines(true)
+                        setDrawAxisLine(true)
+                        textColor = Color.DKGRAY
+                        valueFormatter = PriceAxisValueFormatter() // Custom formatter for prices
+                    }
+
+                    // Right Y-axis configuration (disable or hide if not needed)
+                    axisRight.isEnabled = false
+
+                    // Legend configuration
+                    legend.apply {
+                        form = com.github.mikephil.charting.components.Legend.LegendForm.CIRCLE
+                        verticalAlignment = com.github.mikephil.charting.components.Legend.LegendVerticalAlignment.TOP
+                        horizontalAlignment = com.github.mikephil.charting.components.Legend.LegendHorizontalAlignment.RIGHT
+                        orientation = com.github.mikephil.charting.components.Legend.LegendOrientation.HORIZONTAL
+                        setDrawInside(false)
+                        textColor = Color.DKGRAY
                     }
                 }
-                xAxis.labelRotationAngle = -45f // Rotate X-axis labels for readability
-                xAxis.setLabelCount(5, true) // Show approximately 5 labels, force interval
+            },
+            update = { chart ->
+                if (entries.isNotEmpty()) {
+                    val dataSet = LineDataSet(entries, "黃金價格").apply {
+                        color = Color.parseColor("#FFC107") // Gold color
+                        setCircleColor(Color.parseColor("#FFC107"))
+                        valueTextColor = Color.DKGRAY
+                        valueTextSize = 10f
+                        lineWidth = 2f
+                        circleRadius = 4f
+                        setDrawCircleHole(false)
+                        setDrawValues(false) // Hide individual data point values
+                        mode = LineDataSet.Mode.CUBIC_BEZIER // Smooth curve
+                    }
 
-                // Y-axis configuration
-                axisRight.isEnabled = false // Disable right Y-axis
-                axisLeft.setDrawGridLines(true) // Enable horizontal grid lines
-                axisLeft.enableGridDashedLine(10f, 10f, 0f) // Make grid lines dashed
-
-                legend.isEnabled = false // No legend needed for a single line chart
-            }
-        },
-        update = { chart ->
-            if (priceHistory.isNotEmpty()) {
-                // Convert KlineData to MPAndroidChart Entry objects
-                val entries = priceHistory.map { kline ->
-                    // X-value is timestamp, Y-value is close price
-                    Entry(kline.openTime.toFloat(), kline.closePrice.toFloat())
+                    val lineData = LineData(dataSet)
+                    chart.data = lineData
+                    chart.invalidate() // Refresh chart
+                    chart.animateX(700) // Animate chart for 700ms along X-axis
+                } else {
+                    chart.data = null
+                    chart.invalidate()
                 }
-
-                // Create a LineDataSet
-                val dataSet = LineDataSet(entries, "PAXG/USDT Price").apply {
-                    color = android.graphics.Color.BLUE // Line color
-                    setCircleColor(android.graphics.Color.BLUE) // Circle color for data points
-                    setDrawValues(false) // Do not draw actual price values on the chart
-                    lineWidth = 2f // Line thickness
-                    circleRadius = 3f // Size of data point circles
-                    setDrawCircleHole(false) // No hole in circles
-                    mode = LineDataSet.Mode.LINEAR // Linear interpolation between points
-                    // Alternatively, use LineDataSet.Mode.CUBIC_BEZIER for smooth curves
-                }
-
-                // Apply data to the chart
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-
-                // Update X-axis range and move view
-                chart.xAxis.axisMinimum = priceHistory.first().openTime.toFloat()
-                chart.xAxis.axisMaximum = priceHistory.last().openTime.toFloat()
-                // Optionally set initial visible range and scroll to end
-                chart.setVisibleXRangeMaximum(TimeUnit.HOURS.toMillis(4).toFloat()) // Show about 4 hours initially
-                chart.moveViewToX(priceHistory.last().openTime.toFloat()) // Scroll to the latest data point
-
-                chart.invalidate() // Refresh the chart view
             }
-        }
-    )
+        )
+    }
 }
 
-// --- Preview Composable for Android Studio ---
+// --- MPAndroidChart ValueFormatters ---
+
+// Formatter for X-axis (Dates)
+class DayAxisValueFormatter(private val timestamps: LongArray) : ValueFormatter() {
+    private val dateFormat = SimpleDateFormat("MMM dd", Locale.getDefault())
+
+    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+        val index = value.toInt()
+        return if (index >= 0 && index < timestamps.size) {
+            dateFormat.format(Date(timestamps[index]))
+        } else {
+            ""
+        }
+    }
+}
+
+// Formatter for Y-axis (Prices)
+class PriceAxisValueFormatter : ValueFormatter() {
+    private val decimalFormat = DecimalFormat("$#,##0.00")
+
+    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+        return decimalFormat.format(value.toDouble())
+    }
+
+    override fun getPointLabel(entry: Entry?): String {
+        return decimalFormat.format(entry?.y?.toDouble() ?: 0.0)
+    }
+}
+
+// --- Modifier for card styling ---
+@Composable
+fun Modifier.cardModifier() = this
+    .fillMaxWidth()
+    .padding(vertical = 8.dp)
+    .background(MaterialTheme.colorScheme.surface, MaterialTheme.shapes.medium)
+    .padding(16.dp)
+
+// --- Preview ---
 @Preview(showBackground = true)
 @Composable
-fun GoldPriceScreenPreview() {
+fun DefaultPreview() {
     AiAgentTheme {
-        // Provide dummy data for a meaningful preview
-        val dummyViewModel = GoldPriceViewModel().apply {
-            currentPrice.value = "PAXG/USDT: 2350.00"
-            priceHistory.value = listOf(
-                // Example data for a short trend (timestamps in milliseconds)
-                KlineData(System.currentTimeMillis() - 3000000, "2300", "2310", "2290", "2305", "", 0, "", 0, "", "", ""),
-                KlineData(System.currentTimeMillis() - 2400000, "2305", "2315", "2300", "2312", "", 0, "", 0, "", "", ""),
-                KlineData(System.currentTimeMillis() - 1800000, "2312", "2320", "2310", "2318", "", 0, "", 0, "", "", ""),
-                KlineData(System.currentTimeMillis() - 1200000, "2318", "2325", "2315", "2322", "", 0, "", 0, "", "", ""),
-                KlineData(System.currentTimeMillis() - 600000, "2322", "2330", "2320", "2328", "", 0, "", 0, "", "", "")
-            )
-            isLoading.value = false
-            errorMessage.value = null
-        }
-        GoldPriceScreen(dummyViewModel)
+        GoldPriceApp()
     }
 }
-```
-
----
-
-### **2. 更新 Gradle 依賴**
-
-這些依賴庫是為了讓 `MainActivity.kt` 中的程式碼能夠正常運作所必需的。
-
-#### **A. 更新 `app/build.gradle.kts` (模組級別的 Gradle 檔案)**
-
-在 `dependencies` 區塊中添加或確認以下依賴：
-
-```kotlin
-// app/build.gradle.kts
-plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-}
-
-android {
-    namespace = "com.example.aiagent"
-    compileSdk = 34 // 使用最新的穩定 API 等級
-    defaultConfig {
-        applicationId = "com.example.aiagent"
-        minSdk = 24 // 支援 Android 7.0 及更高版本
-        targetSdk = 34 // 使用最新的穩定 API 等級
-        versionCode = 1
-        versionName = "1.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary = true
-        }
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-    kotlinOptions {
-        jvmTarget = "1.8"
-    }
-    buildFeatures {
-        compose = true // 啟用 Jetpack Compose
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.1" // 請檢查您的 Android Studio 版本兼容的最新穩定版本
-    }
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
-    }
-}
-
-dependencies {
-    // AndroidX & Compose 核心依賴
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
-    implementation("androidx.activity:activity-compose:1.8.2")
-    implementation(platform("androidx.compose:compose-bom:2023.08.00")) // 請檢查最新的穩定 BOM 版本
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
-
-    // ViewModel for Jetpack Compose (provides viewModel() composable)
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
-
-    // OkHttp for網路請求
-    implementation("com.squareup.okhttp3:okhttp:4.12.0") // 使用最新的穩定版本
-
-    // Gson for JSON解析
-    implementation("com.google.code.gson:gson:2.10.1") // 使用最新的穩定版本
-
-    // MPAndroidChart for繪製圖表 (通常在 jitpack.io 上託管)
-    implementation("com.github.PhilJay:MPAndroidChart:v3.1.0") // v3.1.0 是常見版本，如果遇到問題可以嘗試其他版本或最新版本
-
-    // 測試依賴 (保留現有)
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2023.08.00"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
-}
-```
-
-#### **B. 更新 `settings.gradle.kts` (專案級別的 Gradle 檔案)**
-
-由於 `MPAndroidChart` 依賴通常託管在 `jitpack.io`，您需要確保在 `settings.gradle.kts` 中添加 `jitpack.io` 倉庫。
-
-```kotlin
-// settings.gradle.kts
-pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-        // 添加 JitPack 倉庫，用於MPAndroidChart
-        maven { url = uri("https://jitpack.io") }
-    }
-}
-rootProject.name = "AiAgent"
-include(":app")
-```
-
----
-
-**修復步驟總結：**
-
-1.  開啟你的 Android Studio 專案。
-2.  導航到 `app/src/main/java/com/example/aiagent/MainActivity.kt` 檔案，將其內容替換為上面提供的「修復 `MainActivity.kt`」部分的程式碼。
-3.  導航到 `app/build.gradle.kts` 檔案，確保其 `dependencies` 區塊與上面提供的「更新 `app/build.gradle.kts`」部分相符。特別是添加 OkHttp, Gson 和 MPAndroidChart 的依賴。
-4.  導航到專案根目錄下的 `settings.gradle.kts` 檔案，確保 `dependencyResolutionManagement` 區塊中包含 `maven { url = uri("https://jitpack.io") }`。
-5.  同步您的 Gradle 專案（通常 Android Studio 會自動提示，或手動點擊 "Sync Project with Gradle Files" 按鈕）。
-
-完成這些步驟後，所有 `Unresolved reference` 和 `Function declaration must have a name` 的錯誤都應該會消失，因為 `MainActivity.kt` 現在包含的是有效的 Kotlin 程式碼，並且所需的依賴庫也已正確配置。

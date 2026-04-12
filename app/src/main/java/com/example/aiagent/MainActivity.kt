@@ -1,106 +1,96 @@
 package com.example.aiagent
 
-import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
+import com.example.aiagent.ui.theme.AIAgentTheme
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
+import com.github.mikephil.charting.formatter.ValueFormatter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.long
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.HttpException
 import retrofit2.Retrofit
-import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import androidx.compose.ui.viewinterop.AndroidView
 import java.io.IOException
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 import java.util.concurrent.TimeUnit
 
-// --- Theme Definition ---
-@Composable
-fun AIAgentTheme(
-    content: @Composable () -> Unit
-) {
-    MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = androidx.compose.ui.graphics.Color(0xFF6200EE),
-            secondary = androidx.compose.ui.graphics.Color(0xFF03DAC5),
-            tertiary = androidx.compose.ui.graphics.Color(0xFF03DAC5)
-        ),
-        content = content
+// Data model for Binance Klines
+// Binance klines endpoint returns List<List<Any>> where numbers are strings.
+// We'll parse it from JsonArray directly.
+@Serializable
+data class KlineData(
+    val openTime: Long,
+    val openPrice: Double,
+    val highPrice: Double,
+    val lowPrice: Double,
+    val closePrice: Double,
+    val volume: Double,
+    val closeTime: Long,
+    val quoteAssetVolume: Double,
+    val numberOfTrades: Long,
+    val takerBuyBaseAssetVolume: Double,
+    val takerBuyQuoteAssetVolume: Double,
+    val ignore: Double // This is often 0.0 or similar
+)
+
+// Helper function to parse a raw JsonArray entry into KlineData
+fun parseKlineData(rawKline: JsonArray): KlineData {
+    return KlineData(
+        openTime = rawKline[0].long,
+        openPrice = rawKline[1].content.toDouble(),
+        highPrice = rawKline[2].content.toDouble(),
+        lowPrice = rawKline[3].content.toDouble(),
+        closePrice = rawKline[4].content.toDouble(),
+        volume = rawKline[5].content.toDouble(),
+        closeTime = rawKline[6].long,
+        quoteAssetVolume = rawKline[7].content.toDouble(),
+        numberOfTrades = rawKline[8].long,
+        takerBuyBaseAssetVolume = rawKline[9].content.toDouble(),
+        takerBuyQuoteAssetVolume = rawKline[10].content.toDouble(),
+        ignore = rawKline[11].content.toDouble()
     )
 }
 
-// --- Data Models ---
-@Serializable
-data class KlineData(
-    @SerialName("0") val openTime: Long,
-    @SerialName("1") val openPrice: String,
-    @SerialName("2") val highPrice: String,
-    @SerialName("3") val lowPrice: String,
-    @SerialName("4") val closePrice: String,
-    @SerialName("5") val volume: String,
-    @SerialName("6") val closeTime: Long,
-    @SerialName("7") val quoteAssetVolume: String,
-    @SerialName("8") val numberOfTrades: Long,
-    @SerialName("9") val takerBuyBaseAssetVolume: String,
-    @SerialName("10") val takerBuyQuoteAssetVolume: String,
-    @SerialName("11") val ignore: String? = null
-)
-
-// --- Network Interface ---
+// Retrofit API Service
 interface BinanceApiService {
     @GET("api/v3/klines")
-    suspend fun getPAXGUSDTPrice(
-        @Query("symbol") symbol: String = "PAXGUSDT",
-        @Query("interval") interval: String = "1h", // 1-hour interval
-        @Query("limit") limit: Int = 24 // Last 24 hours
-    ): List<List<String>> // Binance API returns List<List<String>> for klines
+    suspend fun getKlines(
+        @Query("symbol") symbol: String,
+        @Query("interval") interval: String,
+        @Query("limit") limit: Int = 500 // Default to 500 data points
+    ): JsonArray // Binance returns a JSON array of arrays
 }
 
-// --- Retrofit Client ---
+// Retrofit Client
 object RetrofitClient {
     private const val BASE_URL = "https://api.binance.com/"
 
@@ -109,281 +99,253 @@ object RetrofitClient {
         isLenient = true
     }
 
+    private val loggingInterceptor = HttpLoggingInterceptor().apply {
+        level = HttpLoggingInterceptor.Level.BODY
+    }
+
     private val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        })
+        .addInterceptor(loggingInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    val retrofit: Retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
-        .client(okHttpClient)
-        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
-        .build()
+    private val retrofit: Retrofit by lazy {
+        Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+    }
 
-    val binanceApiService: BinanceApiService by lazy {
+    val api: BinanceApiService by lazy {
         retrofit.create(BinanceApiService::class.java)
     }
 }
 
-// --- Repository ---
-interface PriceRepository {
-    suspend fun getPAXGUSDTPrice(): Result<List<KlineData>>
-}
+// ViewModel
+class GoldPriceViewModel(private val apiService: BinanceApiService) : ViewModel() {
 
-class PriceRepositoryImpl(private val apiService: BinanceApiService) : PriceRepository {
-    override suspend fun getPAXGUSDTPrice(): Result<List<KlineData>> {
-        return try {
-            val response = apiService.getPAXGUSDTPrice()
-            val klineDataList = response.map { rawKline ->
-                KlineData(
-                    openTime = rawKline[0].toLong(),
-                    openPrice = rawKline[1],
-                    highPrice = rawKline[2],
-                    lowPrice = rawKline[3],
-                    closePrice = rawKline[4],
-                    volume = rawKline[5],
-                    closeTime = rawKline[6].toLong(),
-                    quoteAssetVolume = rawKline[7],
-                    numberOfTrades = rawKline[8].toLong(),
-                    takerBuyBaseAssetVolume = rawKline[9],
-                    takerBuyQuoteAssetVolume = rawKline[10],
-                    ignore = rawKline.getOrNull(11) // Handle optional 'ignore' field
-                )
-            }
-            Result.success(klineDataList)
-        } catch (e: HttpException) {
-            Log.e("PriceRepository", "HTTP Error: ${e.code()} - ${e.message()}")
-            Result.failure(e)
-        } catch (e: IOException) {
-            Log.e("PriceRepository", "Network Error: ${e.message}")
-            Result.failure(e)
-        } catch (e: Exception) {
-            Log.e("PriceRepository", "Unknown Error: ${e.message}")
-            Result.failure(e)
-        }
-    }
-}
+    private val _currentPrice = MutableStateFlow<Double?>(null)
+    val currentPrice: StateFlow<Double?> = _currentPrice
 
-// --- ViewModel ---
-class PriceTrackerViewModel(private val repository: PriceRepository) : ViewModel() {
+    private val _klineData = MutableStateFlow<List<KlineData>>(emptyList())
+    val klineData: StateFlow<List<KlineData>> = _klineData
 
-    private val _paxgPriceData = MutableStateFlow<List<KlineData>>(emptyList())
-    val paxgPriceData: StateFlow<List<KlineData>> = _paxgPriceData
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading
-
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error
-
-    private val _currentPrice = MutableStateFlow<String>("N/A")
-    val currentPrice: StateFlow<String> = _currentPrice
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage
 
     init {
-        fetchPAXGUSDTPrice()
+        fetchGoldPriceData()
     }
 
-    fun fetchPAXGUSDTPrice() {
-        _isLoading.value = true
-        _error.value = null
+    fun fetchGoldPriceData() {
         viewModelScope.launch {
-            val result = repository.getPAXGUSDTPrice()
-            result.onSuccess { data ->
-                _paxgPriceData.value = data
-                _currentPrice.value = data.lastOrNull()?.closePrice ?: "N/A"
-                _isLoading.value = false
-            }.onFailure { throwable ->
-                _error.value = "Failed to fetch price: ${throwable.localizedMessage}"
-                _isLoading.value = false
-                Log.e("PriceTrackerViewModel", "Error fetching price", throwable)
+            _errorMessage.value = null
+            try {
+                // Fetch recent klines for PAXGUSDT, e.g., 24 hours of 1-hour intervals
+                val rawKlines = apiService.getKlines(symbol = "PAXGUSDT", interval = "1h", limit = 24)
+                val parsedKlines = rawKlines.map { parseKlineData(it as JsonArray) }
+                _klineData.value = parsedKlines
+
+                // Update current price from the latest kline
+                _currentPrice.value = parsedKlines.lastOrNull()?.closePrice
+
+            } catch (e: HttpException) {
+                _errorMessage.value = "HTTP Error: ${e.code()} - ${e.message()}"
+                Log.e("GoldPriceViewModel", "HTTP Error: ${e.code()} - ${e.message()}", e)
+            } catch (e: IOException) {
+                _errorMessage.value = "Network Error: ${e.message}"
+                Log.e("GoldPriceViewModel", "Network Error: ${e.message}", e)
+            } catch (e: Exception) {
+                _errorMessage.value = "An unexpected error occurred: ${e.message}"
+                Log.e("GoldPriceViewModel", "Unexpected Error: ${e.message}", e)
             }
         }
     }
 }
 
-// --- ViewModel Factory ---
-class PriceTrackerViewModelFactory(private val repository: PriceRepository) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
+// ViewModel Factory
+class GoldPriceViewModelFactory(private val apiService: BinanceApiService) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(PriceTrackerViewModel::class.java)) {
-            return PriceTrackerViewModel(repository) as T
+        if (modelClass.isAssignableFrom(GoldPriceViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return GoldPriceViewModel(apiService) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
 
-// --- MainActivity ---
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val repository = PriceRepositoryImpl(RetrofitClient.binanceApiService)
-        val viewModelFactory = PriceTrackerViewModelFactory(repository)
-        val viewModel: PriceTrackerViewModel by viewModels { viewModelFactory }
-
         setContent {
             AIAgentTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    PriceTrackerScreen(viewModel = viewModel)
+                    val viewModel: GoldPriceViewModel = viewModel(
+                        factory = GoldPriceViewModelFactory(RetrofitClient.api)
+                    )
+                    GoldPriceTrackerApp(viewModel = viewModel)
                 }
             }
         }
     }
 }
 
-// --- Composable UI ---
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PriceTrackerScreen(viewModel: PriceTrackerViewModel) {
-    val paxgPriceData by viewModel.paxgPriceData.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
+fun GoldPriceTrackerApp(viewModel: GoldPriceViewModel) {
     val currentPrice by viewModel.currentPrice.collectAsState()
+    val klineData by viewModel.klineData.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("PAXGUSDT 金價追蹤") })
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "PAXGUSDT Price Tracker",
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        if (errorMessage != null) {
             Text(
-                text = "當前 PAXGUSDT 價格: $currentPrice",
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(bottom = 16.dp)
+                text = "Error: ${errorMessage!!}",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
+        }
 
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.size(48.dp))
-                Text("載入中...", modifier = Modifier.padding(top = 8.dp))
-            } else if (error != null) {
-                Text(
-                    text = "錯誤: $error",
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-                Button(onClick = { viewModel.fetchPAXGUSDTPrice() }) {
-                    Text("重試")
-                }
-            } else if (paxgPriceData.isNotEmpty()) {
-                PriceChart(paxgPriceData = paxgPriceData, modifier = Modifier.fillMaxSize())
-            } else {
-                Text("沒有數據可顯示。", modifier = Modifier.padding(bottom = 16.dp))
-                Button(onClick = { viewModel.fetchPAXGUSDTPrice() }) {
-                    Text("載入數據")
-                }
-            }
+        CurrentPriceDisplay(currentPrice = currentPrice)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (klineData.isNotEmpty()) {
+            LineChartComposable(klineData = klineData)
+        } else if (errorMessage == null) {
+            CircularProgressIndicator(modifier = Modifier.fillMaxWidth().wrapContentWidth())
         }
     }
 }
 
 @Composable
-fun PriceChart(paxgPriceData: List<KlineData>, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
+fun CurrentPriceDisplay(currentPrice: Double?) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Current PAXGUSDT Price:",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = currentPrice?.let { String.format("$%.2f", it) } ?: "Loading...",
+                style = MaterialTheme.typography.headlineLarge
+            )
+        }
+    }
+}
+
+@Composable
+fun LineChartComposable(klineData: List<KlineData>) {
+    val entries = remember(klineData) {
+        klineData.mapIndexed { index, data ->
+            Entry(index.toFloat(), data.closePrice.toFloat())
+        }
+    }
+
+    val lineDataSet = remember(entries) {
+        LineDataSet(entries, "PAXGUSDT Price").apply {
+            color = android.graphics.Color.BLUE
+            setCircleColor(android.graphics.Color.BLUE)
+            lineWidth = 2f
+            circleRadius = 3f
+            setDrawCircleHole(false)
+            setDrawValues(false) // Hide values on the chart
+            mode = LineDataSet.Mode.LINEAR // Smooth line
+        }
+    }
+
+    val lineData = remember(lineDataSet) {
+        LineData(lineDataSet)
+    }
+
     AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            LineChart(ctx).apply {
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(300.dp),
+        factory = { context ->
+            LineChart(context).apply {
                 description.isEnabled = false
-                setTouchEnabled(true)
-                isDragEnabled = true
-                setScaleEnabled(true)
-                setPinchZoom(true)
+                legend.isEnabled = false
 
-                xAxis.position = XAxis.XAxisPosition.BOTTOM
-                xAxis.setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
-                xAxis.setDrawAxisLine(true)
-                xAxis.textColor = Color.BLACK
-                xAxis.valueFormatter = object : IndexAxisValueFormatter() {
-                    private val mFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    override fun getFormattedValue(value: Float): String {
-                        // Ensure value is within bounds of paxgPriceData list
-                        val index = value.toInt()
-                        if (index < 0 || index >= paxgPriceData.size) {
-                            return "" // Or some default value
+                xAxis.apply {
+                    position = XAxis.XAxisPosition.BOTTOM
+                    setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
+                    setDrawAxisLine(true)
+                    granularity = 1f // Only show labels for whole numbers
+                    valueFormatter = object : ValueFormatter() {
+                        private val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+                        override fun getAxisLabel(value: Float, axis: XAxis?): String {
+                            // Map index back to original timestamp
+                            val index = value.toInt()
+                            return if (index >= 0 && index < klineData.size) {
+                                dateFormat.format(Date(klineData[index].openTime))
+                            } else {
+                                ""
+                            }
                         }
-                        val timestamp = paxgPriceData[index].openTime
-                        return mFormat.format(Date(timestamp))
                     }
+                    labelRotationAngle = -45f // Rotate labels for better readability
                 }
-                xAxis.labelRotationAngle = -45f // Rotate labels for better readability
-                xAxis.setLabelCount(4, true) // Show approximately 4 labels, force these to be exactly 4
 
-                axisLeft.setDrawGridLines(true)
-                axisLeft.textColor = Color.BLACK
+                axisLeft.apply {
+                    setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
+                    setDrawAxisLine(true)
+                    // Set Y-axis limits dynamically with a small buffer
+                    val minPrice = klineData.minOfOrNull { it.closePrice }?.toFloat() ?: 0f
+                    val maxPrice = klineData.maxOfOrNull { it.closePrice }?.toFloat() ?: 1000f
+                    axisMinimum = minPrice * 0.99f // 1% buffer below min
+                    axisMaximum = maxPrice * 1.01f // 1% buffer above max
+                }
+
                 axisRight.isEnabled = false // Disable right Y-axis
-
-                legend.isEnabled = true
-                legend.textColor = Color.BLACK
+                setTouchEnabled(true)
+                setPinchZoom(true)
+                setNoDataText("No chart data available.")
             }
         },
         update = { chart ->
-            if (paxgPriceData.isNotEmpty()) {
-                val entries = paxgPriceData.mapIndexed { index, kline ->
-                    Entry(index.toFloat(), kline.closePrice.toFloat())
-                }
-
-                val dataSet = LineDataSet(entries, "PAXGUSDT Close Price").apply {
-                    color = Color.BLUE
-                    setCircleColor(Color.BLUE)
-                    lineWidth = 2f
-                    circleRadius = 3f
-                    setDrawCircleHole(false)
-                    valueTextSize = 0f // Hide value text on chart
-                    mode = LineDataSet.Mode.LINEAR // Smooth line
-                    setDrawFilled(true) // Fill area below the line
-                    fillColor = Color.BLUE
-                    fillAlpha = 50
-                }
-
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-                chart.invalidate() // Refresh chart
-            } else {
-                chart.clear()
-                chart.invalidate()
-            }
+            chart.data = lineData
+            chart.invalidate() // Refresh chart
+            chart.animateX(500) // Animate chart
         }
     )
 }
 
-// --- Preview ---
 @Preview(showBackground = true)
 @Composable
-fun PreviewPriceTrackerScreen() {
+fun DefaultPreview() {
     AIAgentTheme {
-        // Create a mock repository for preview
-        val mockRepository = object : PriceRepository {
-            override suspend fun getPAXGUSDTPrice(): Result<List<KlineData>> {
-                // Simulate some dummy data for preview
-                val dummyData = listOf(
-                    KlineData(1678886400000, "1800.0", "1805.0", "1795.0", "1802.0", "100", 1678890000000, "180200", 50, "50", "90100"),
-                    KlineData(1678890000000, "1802.0", "1810.0", "1800.0", "1808.0", "120", 1678893600000, "216960", 60, "60", "108480"),
-                    KlineData(1678893600000, "1808.0", "1815.0", "1805.0", "1812.0", "110", 1678897200000, "199320", 55, "55", "99660"),
-                    KlineData(1678897200000, "1812.0", "1820.0", "1810.0", "1818.0", "130", 1678900800000, "236340", 65, "65", "118170"),
-                    KlineData(1678900800000, "1818.0", "1825.0", "1815.0", "1822.0", "140", 1678904400000, "255080", 70, "70", "127540"),
-                    KlineData(1678904400000, "1822.0", "1830.0", "1820.0", "1828.0", "150", 1678908000000, "274200", 75, "75", "137100")
-                )
-                return Result.success(dummyData)
-            }
+        // Create a dummy ViewModel for preview
+        val dummyKlines = listOf(
+            KlineData(1678886400000, 1000.0, 1005.0, 995.0, 1002.0, 100.0, 1678890000000, 100000.0, 100, 50.0, 50.0, 0.0),
+            KlineData(1678890000000, 1002.0, 1008.0, 1000.0, 1005.0, 120.0, 1678893600000, 120000.0, 110, 60.0, 60.0, 0.0),
+            KlineData(1678893600000, 1005.0, 1010.0, 1003.0, 1007.0, 110.0, 1678897200000, 110000.0, 105, 55.0, 55.0, 0.0),
+            KlineData(1678897200000, 1007.0, 1012.0, 1005.0, 1009.0, 130.0, 1678900800000, 130000.0, 120, 65.0, 65.0, 0.0),
+            KlineData(1678900800000, 1009.0, 1015.0, 1007.0, 1012.0, 140.0, 1678904400000, 140000.0, 130, 70.0, 70.0, 0.0)
+        )
+        val dummyViewModel = object : GoldPriceViewModel(RetrofitClient.api) {
+            override val currentPrice: StateFlow<Double?> = MutableStateFlow(1012.0)
+            override val klineData: StateFlow<List<KlineData>> = MutableStateFlow(dummyKlines)
+            override val errorMessage: StateFlow<String?> = MutableStateFlow(null)
         }
-        val viewModel = PriceTrackerViewModel(mockRepository)
-        // Manually trigger data fetch for preview, as init block won't run in isolation
-        LaunchedEffect(Unit) {
-            viewModel.fetchPAXGUSDTPrice()
-        }
-        PriceTrackerScreen(viewModel = viewModel)
+        GoldPriceTrackerApp(viewModel = dummyViewModel)
     }
 }

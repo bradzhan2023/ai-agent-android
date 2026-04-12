@@ -9,20 +9,20 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewModelScope
 import com.example.aiagent.ui.theme.AiAgentTheme
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.Legend
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
+import com.google.gson.GsonBuilder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -33,76 +33,46 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
-import android.graphics.Color // For MPAndroidChart colors
+import java.text.SimpleDateFormat
+import java.util.*
 
-// Data model for Binance KLine
-// Binance KLines API returns a list of lists, where each inner list represents a KLine.
-// The types within the inner list are mixed (Double for timestamps, String for prices).
-// We define a data class to hold the parsed values.
-data class KLine(
+// Data Models
+data class KlineDataPoint(
     val openTime: Long,
-    val openPrice: String,
-    val highPrice: String,
-    val lowPrice: String,
-    val closePrice: String,
-    val volume: String,
-    val closeTime: Long,
-    val quoteAssetVolume: String,
-    val numberOfTrades: Long,
-    val takerBuyBaseAssetVolume: String,
-    val takerBuyQuoteAssetVolume: String,
-    val ignore: String
+    val closePrice: Double
 )
 
-// Helper function to parse the raw list of Any from Binance API into a KLine object.
-// This is necessary because Gson struggles with direct deserialization of mixed types in a list.
-fun parseKLine(rawList: List<Any>): KLine {
-    return KLine(
-        openTime = (rawList[0] as Double).toLong(),
-        openPrice = rawList[1] as String,
-        highPrice = rawList[2] as String,
-        lowPrice = rawList[3] as String,
-        closePrice = rawList[4] as String,
-        volume = rawList[5] as String,
-        closeTime = (rawList[6] as Double).toLong(),
-        quoteAssetVolume = rawList[7] as String,
-        numberOfTrades = (rawList[8] as Double).toLong(),
-        takerBuyBaseAssetVolume = rawList[9] as String,
-        takerBuyQuoteAssetVolume = rawList[10] as String,
-        ignore = rawList[11] as String
-    )
-}
-
-// Retrofit API Service Interface for Binance
+// Retrofit Interface for Binance API
 interface BinanceApiService {
     @GET("api/v3/klines")
     fun getKlines(
         @Query("symbol") symbol: String,
         @Query("interval") interval: String,
-        @Query("limit") limit: Int = 500 // Default limit for number of klines
-    ): Call<List<List<Any>>> // The API returns a list of lists of various types
+        @Query("limit") limit: Int
+    ): Call<List<List<String>>> // Binance API returns list of lists of strings
 }
 
-// Retrofit Client for API calls
+// Retrofit Client Singleton
 object RetrofitClient {
     private const val BASE_URL = "https://api.binance.com/"
 
     val apiService: BinanceApiService by lazy {
+        val gson = GsonBuilder().setLenient().create() // Use lenient for potentially malformed JSON
         Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(BinanceApiService::class.java)
     }
 }
 
-// ViewModel for fetching and managing gold price data
+// ViewModel to manage UI state and data fetching
 class GoldPriceViewModel : ViewModel() {
-    private val _currentPrice = MutableStateFlow<String>("Loading...")
-    val currentPrice: StateFlow<String> = _currentPrice
+    private val _currentPrice = MutableStateFlow<Double?>(null)
+    val currentPrice: StateFlow<Double?> = _currentPrice
 
-    private val _chartEntries = MutableStateFlow<List<Entry>>(emptyList())
-    val chartEntries: StateFlow<List<Entry>> = _chartEntries
+    private val _klineData = MutableStateFlow<List<KlineDataPoint>>(emptyList())
+    val klineData: StateFlow<List<KlineDataPoint>> = _klineData
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -111,51 +81,60 @@ class GoldPriceViewModel : ViewModel() {
     val errorMessage: StateFlow<String?> = _errorMessage
 
     init {
-        fetchGoldPriceHistory()
+        fetchGoldPriceData()
     }
 
-    fun fetchGoldPriceHistory() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _errorMessage.value = null
-            RetrofitClient.apiService.getKlines("PAXGUSDT", "1h", 100).enqueue(object : Callback<List<List<Any>>> {
-                override fun onResponse(call: Call<List<List<Any>>>, response: Response<List<List<Any>>>) {
+    fun fetchGoldPriceData() {
+        _isLoading.value = true
+        _errorMessage.value = null
+
+        RetrofitClient.apiService.getKlines("PAXGUSDT", "1h", 100).enqueue(object : Callback<List<List<String>>> {
+            override fun onResponse(call: Call<List<List<String>>>, response: Response<List<List<String>>>) {
+                viewModelScope.launch {
                     _isLoading.value = false
                     if (response.isSuccessful) {
                         val rawKlines = response.body()
                         if (rawKlines != null && rawKlines.isNotEmpty()) {
-                            val klines = rawKlines.map { parseKLine(it) }
-                            // Convert KLine data to MPAndroidChart Entry objects
-                            val entries = klines.mapIndexed { index, kline ->
-                                Entry(index.toFloat(), kline.closePrice.toFloat())
+                            val parsedKlines = rawKlines.mapNotNull { kline ->
+                                try {
+                                    // Kline data structure: [openTime, openPrice, highPrice, lowPrice, closePrice, ...]
+                                    val openTime = kline[0].toLong()
+                                    val closePrice = kline[4].toDouble()
+                                    KlineDataPoint(openTime, closePrice)
+                                } catch (e: Exception) {
+                                    Log.e("GoldPriceViewModel", "Error parsing kline data: $kline", e)
+                                    null
+                                }
                             }
-                            _chartEntries.value = entries
-                            _currentPrice.value = klines.last().closePrice // Display the latest close price
+                            _klineData.value = parsedKlines
+                            _currentPrice.value = parsedKlines.lastOrNull()?.closePrice
                         } else {
-                            _errorMessage.value = "No data received."
+                            _errorMessage.value = "No data received or empty response."
                         }
                     } else {
                         _errorMessage.value = "Error: ${response.code()} - ${response.message()}"
-                        Log.e("GoldPriceViewModel", "API Error: ${response.code()} - ${response.message()}")
                     }
                 }
+            }
 
-                override fun onFailure(call: Call<List<List<Any>>>, t: Throwable) {
+            override fun onFailure(call: Call<List<List<String>>>, t: Throwable) {
+                viewModelScope.launch {
                     _isLoading.value = false
                     _errorMessage.value = "Network error: ${t.message}"
                     Log.e("GoldPriceViewModel", "Network error fetching klines", t)
                 }
-            })
-        }
+            }
+        })
     }
 }
 
-// Main Activity for the Jetpack Compose app
+// Main Activity for the Android application
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             AiAgentTheme {
+                // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -167,127 +146,146 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Composable for the main gold price tracker screen
+// Composable function for the main screen
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GoldPriceTrackerScreen(viewModel: GoldPriceViewModel = viewModel()) {
     val currentPrice by viewModel.currentPrice.collectAsState()
-    val chartEntries by viewModel.chartEntries.collectAsState()
+    val klineData by viewModel.klineData.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "PAXGUSDT Price Tracker",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("PAXGUSDT 金價追蹤") })
         }
-
-        errorMessage?.let { message ->
-            Text(
-                text = "Error: $message",
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-
-        Text(
-            text = "Current Price: $currentPrice USDT",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        Button(
-            onClick = { viewModel.fetchGoldPriceHistory() },
-            enabled = !isLoading // Disable button while loading
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Refresh Price")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (chartEntries.isNotEmpty()) {
-            LineChartCompose(entries = chartEntries, modifier = Modifier.fillMaxWidth().height(300.dp))
-        } else if (!isLoading && errorMessage == null) {
-            Text("No chart data available.", modifier = Modifier.padding(16.dp))
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+                Text("載入中...", style = MaterialTheme.typography.bodyLarge)
+            } else if (errorMessage != null) {
+                Text(
+                    text = "錯誤: ${errorMessage}",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(16.dp)
+                )
+                Button(onClick = { viewModel.fetchGoldPriceData() }) {
+                    Text("重試")
+                }
+            } else {
+                currentPrice?.let { price ->
+                    CurrentPriceDisplay(price = price)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                if (klineData.isNotEmpty()) {
+                    GoldPriceChart(klineData = klineData)
+                } else {
+                    Text("沒有圖表數據。", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
         }
     }
 }
 
-// Composable wrapper for MPAndroidChart LineChart
+// Composable to display the current price
 @Composable
-fun LineChartCompose(entries: List<Entry>, modifier: Modifier = Modifier) {
-    // LocalContext is needed to create the LineChart view
-    val context = LocalContext.current
+fun CurrentPriceDisplay(price: Double) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = "當前 PAXGUSDT 價格",
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            text = String.format("%.2f USDT", price),
+            style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+// Composable to display the LineChart using MPAndroidChart
+@Composable
+fun GoldPriceChart(klineData: List<KlineDataPoint>) {
+    val entries = remember(klineData) {
+        klineData.mapIndexed { index, dataPoint ->
+            Entry(index.toFloat(), dataPoint.closePrice.toFloat())
+        }
+    }
+
+    val xAxisFormatter = remember(klineData) {
+        object : IndexAxisValueFormatter() {
+            private val dateFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+            override fun getFormattedValue(value: Float): String {
+                val index = value.toInt()
+                return if (index >= 0 && index < klineData.size) {
+                    dateFormat.format(Date(klineData[index].openTime))
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
     AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            LineChart(ctx).apply {
-                // Basic chart configuration
-                description.isEnabled = false // Disable chart description
-                setTouchEnabled(true) // Enable touch gestures
-                isDragEnabled = true // Enable dragging
-                setScaleEnabled(true) // Enable scaling
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(300.dp),
+        factory = { context ->
+            LineChart(context).apply {
+                description.isEnabled = false // Disable description label
+                setTouchEnabled(true)
+                isDragEnabled = true
+                setScaleEnabled(true)
                 setPinchZoom(true) // Enable pinch zoom
 
-                // Configure X-axis
                 xAxis.apply {
-                    position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
-                    setDrawGridLines(false) // Do not draw grid lines for X-axis
-                    setDrawAxisLine(true) // Draw axis line
-                    granularity = 1f // Only intervals of 1 on the axis
-                    valueFormatter = IndexAxisValueFormatter() // Simple index formatter for now
-                    textColor = Color.BLACK // Set text color for better visibility
+                    position = XAxis.XAxisPosition.BOTTOM
+                    setDrawGridLines(false) // Disable vertical grid lines
+                    valueFormatter = xAxisFormatter
+                    granularity = 1f // Only show integer values on the axis
+                    labelRotationAngle = -45f // Rotate labels for better readability
+                    setLabelCount(4, true) // Show approximately 4 labels, force integers
+                    textColor = android.graphics.Color.BLACK
                 }
 
-                // Configure Left Y-axis
+                axisRight.isEnabled = false // Disable right Y-axis
                 axisLeft.apply {
-                    setDrawGridLines(true) // Draw grid lines for Y-axis
-                    setDrawAxisLine(true) // Draw axis line
-                    textColor = Color.BLACK // Set text color for better visibility
+                    setDrawGridLines(true) // Enable horizontal grid lines
+                    enableGridDashedLine(10f, 10f, 0f) // Dashed grid lines
+                    textColor = android.graphics.Color.BLACK
                 }
 
-                // Disable Right Y-axis
-                axisRight.isEnabled = false
-
-                // Configure Legend
-                legend.apply {
-                    isEnabled = true
-                    verticalAlignment = Legend.LegendVerticalAlignment.TOP
-                    horizontalAlignment = Legend.LegendHorizontalAlignment.RIGHT
-                    orientation = Legend.LegendOrientation.HORIZONTAL
-                    setDrawInside(false)
-                    form = Legend.LegendForm.CIRCLE
-                    textColor = Color.BLACK // Set text color for better visibility
-                }
+                legend.isEnabled = false // Disable legend
+                setNoDataText("沒有圖表數據可顯示")
             }
         },
         update = { chart ->
             if (entries.isNotEmpty()) {
-                val dataSet = LineDataSet(entries, "PAXGUSDT Close Price").apply {
-                    color = Color.BLUE // Line color
-                    setCircleColor(Color.RED) // Circle color for data points
-                    lineWidth = 2f // Line width
-                    circleRadius = 3f // Radius of the circles
-                    setDrawCircleHole(false) // Do not draw a hole in the circles
-                    valueTextSize = 9f // Size of the value text
-                    setDrawValues(false) // Hide value text on chart for a cleaner look
-                    setDrawFilled(false) // Disable fill under the line to avoid drawable dependency
+                val dataSet = LineDataSet(entries, "PAXGUSDT Price").apply {
+                    color = android.graphics.Color.BLUE
+                    setCircleColor(android.graphics.Color.BLUE)
+                    lineWidth = 2f
+                    circleRadius = 3f
+                    setDrawCircleHole(false)
+                    valueTextSize = 0f // Hide value text on points
+                    mode = LineDataSet.Mode.LINEAR // Smooth line
+                    setDrawFilled(true) // Fill area below the line
+                    fillColor = android.graphics.Color.BLUE
+                    fillAlpha = 50 // Transparency for fill
                 }
-
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-                chart.invalidate() // Refresh chart to display new data
+                chart.data = LineData(dataSet)
+                chart.invalidate() // Refresh chart
             } else {
-                chart.clear() // Clear chart if entries are empty
+                chart.clear() // Clear existing data if entries are empty
                 chart.invalidate()
             }
         }

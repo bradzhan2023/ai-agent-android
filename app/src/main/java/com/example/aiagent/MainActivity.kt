@@ -1,119 +1,57 @@
-由於提供的錯誤日誌內容為通用的 "Compilation error. See log for more details"，並未包含具體的錯誤行號或錯誤信息（如 `e:` 標註的行），我將提供一個完整的 `MainActivity.kt` 程式碼，該程式碼實作了抓取 Binance PAXGUSDT 金價並繪製 LineChart 的功能，並假設相關的依賴和 AndroidManifest.xml 設定已正確配置。
+package com.example.aiagent
 
-此解決方案涵蓋了：
-1.  使用 Retrofit 進行網路請求。
-2.  使用 Kotlin Coroutines 處理非同步操作。
-3.  使用 MPAndroidChart 繪製折線圖。
-4.  將當前價格和歷史 K 線數據顯示在 UI 上。
-
-**請確保您已在 `build.gradle (app)` 中添加了以下依賴，並且在 `AndroidManifest.xml` 中添加了網路權限：**
-
-**`build.gradle (app)` 依賴：**
-
-gradle
-dependencies {
-    // ... 其他依賴
-
-    // Kotlin Coroutines
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.1' // 或更新版本
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2' // 或更新版本
-
-    // Retrofit for network requests
-    implementation 'com.squareup.retrofit2:retrofit:2.9.0'
-    implementation 'com.squareup.retrofit2:converter-gson:2.9.0'
-
-    // MPAndroidChart for charting
-    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0' // 或更新版本
-}
-
-
-**`build.gradle (project)` (如果使用 JitPack 的話，需添加 JitPack 倉庫)：**
-
-gradle
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' } // For MPAndroidChart
-    }
-}
-
-
-**`AndroidManifest.xml` 權限：**
-
-xml
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.your.package.name"> <!-- 替換為您的實際 package name -->
-
-    <uses-permission android:name="android.permission.INTERNET" />
-
-    <application
-        <!-- ... 其他應用程式設定 -->
-        <activity android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-
-
-**`activity_main.xml` (佈局檔案)：**
-
-xml
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp"
-    tools:context=".MainActivity">
-
-    <TextView
-        android:id="@+id/priceTextView"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="正在抓取 PAXGUSDT 價格..."
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="16dp" />
-
-    <com.github.mikephil.charting.charts.LineChart
-        android:id="@+id/lineChart"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
-
-</LinearLayout>
-
-
----
-
-以下是修復後的 `MainActivity.kt` 完整程式碼：
-
-
-package com.example.goldtracker // 請將此替換為您的實際 package name
-
-import android.graphics.Color
+import android.app.Activity
 import android.os.Bundle
-import android.util.Log
-import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
-import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.XAxis
-import com.github.mikephil.charting.data.Entry
-import com.github.mikephil.charting.data.LineData
-import com.github.mikephil.charting.data.LineDataSet
-import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
-import com.google.gson.GsonBuilder
-import kotlinx.coroutines.Dispatchers
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.patrykandpatrick.vico.compose.axis.axisLabelComponent
+import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
+import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
+import com.patrykandpatrick.vico.compose.chart.Chart
+import com.patrykandpatrick.vico.compose.chart.line.lineChart
+import com.patrykandpatrick.vico.compose.chart.line.rememberLineChart
+import com.patrykandpatrick.vico.compose.chart.marker.rememberMarker
+import com.patrykandpatrick.vico.compose.chart.scroll.rememberVicoScrollState
+import com.patrykandpatrick.vico.compose.chart.zoom.rememberVicoZoomState
+import com.patrykandpatrick.vico.compose.component.rememberLineComponent
+import com.patrykandpatrick.vico.compose.component.rememberShapeComponent
+import com.patrykandpatrick.vico.compose.component.rememberTextComponent
+import com.patrykandpatrick.vico.compose.dimensions.dimensionsOf
+import com.patrykandpatrick.vico.compose.marker.rememberMarkerLabelFormatter
+import com.patrykandpatrick.vico.core.axis.AxisPosition
+import com.patrykandpatrick.vico.core.axis.formatter.ValueFormatter
+import com.patrykandpatrick.vico.core.chart.entry.ChartEntry
+import com.patrykandpatrick.vico.core.chart.entry.ChartEntryModel
+import com.patrykandpatrick.vico.core.chart.entry.ChartEntryModelProducer
+import com.patrykandpatrick.vico.core.chart.entry.entryOf
+import com.patrykandpatrick.vico.core.component.marker.MarkerComponent
+import com.patrykandpatrick.vico.core.component.shape.ShapeComponent
+import com.patrykandpatrick.vico.core.component.shape.Shapes
+import com.patrykandpatrick.vico.core.component.shape.cornered.Corner
+import com.patrykandpatrick.vico.core.component.shape.cornered.CutCornerShape
+import com.patrykandpatrick.vico.core.extension.forEachPoint
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -122,159 +60,359 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainActivity : AppCompatActivity() {
+/**
+ * --- Retrofit API Service for Binance ---
+ */
+interface BinanceApiService {
+    @GET("api/v3/klines")
+    suspend fun getKlines(
+        @Query("symbol") symbol: String,
+        @Query("interval") interval: String,
+        @Query("limit") limit: Int
+    ): List<List<Any>> // Binance API returns array of arrays with mixed types
+}
 
-    // UI 元件的 lateinit 宣告
-    private lateinit var priceTextView: TextView
-    private lateinit var lineChart: LineChart
+/**
+ * --- Data Model for Kline (Candlestick) Data ---
+ */
+data class KlineData(
+    val openTime: Long,
+    val openPrice: Double,
+    val highPrice: Double,
+    val lowPrice: Double,
+    val closePrice: Double,
+    val volume: Double,
+    val closeTime: Long
+) {
+    companion object {
+        // Parses a single kline response from Binance API
+        // Format: [
+        //   [0] openTime (Long),
+        //   [1] openPrice (String),
+        //   [2] highPrice (String),
+        //   [3] lowPrice (String),
+        //   [4] closePrice (String),
+        //   [5] volume (String),
+        //   [6] closeTime (Long),
+        //   ... other fields
+        // ]
+        fun fromBinanceResponse(response: List<Any>): KlineData {
+            return KlineData(
+                openTime = (response[0] as Number).toLong(), // Timestamps are Long or Double sometimes
+                openPrice = (response[1] as String).toDouble(),
+                highPrice = (response[2] as String).toDouble(),
+                lowPrice = (response[3] as String).toDouble(),
+                closePrice = (response[4] as String).toDouble(),
+                volume = (response[5] as String).toDouble(),
+                closeTime = (response[6] as Number).toLong()
+            )
+        }
+    }
+}
 
-    // Retrofit 服務實例，用於呼叫幣安 API
-    private val binanceApiService: BinanceApiService by lazy {
+/**
+ * --- ViewModel for Gold Price Tracking ---
+ */
+class GoldPriceViewModel : ViewModel() {
+
+    private val _currentPrice = MutableStateFlow<Double?>(null)
+    val currentPrice: StateFlow<Double?> = _currentPrice.asStateFlow()
+
+    private val _historicalPrices = MutableStateFlow<List<KlineData>>(emptyList())
+    val historicalPrices: StateFlow<List<KlineData>> = _historicalPrices.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    private val apiService by lazy {
         Retrofit.Builder()
-            .baseUrl("https://api.binance.com/") // 幣安 API 的基礎 URL
-            .addConverterFactory(GsonConverterFactory.create(GsonBuilder().setLenient().create()))
+            .baseUrl("https://api.binance.com/")
+            .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(BinanceApiService::class.java)
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // 設定 Activity 的佈局檔案
-
-        // 初始化 UI 元件
-        priceTextView = findViewById(R.id.priceTextView)
-        lineChart = findViewById(R.id.lineChart)
-
-        // 在 Activity 建立時開始抓取資料
-        fetchPriceAndChartData()
+    init {
+        fetchPrices()
     }
 
-    // 抓取當前價格和歷史 K 線數據的函數
-    private fun fetchPriceAndChartData() {
-        // 使用 lifecycleScope 在 IO 執行緒上啟動一個協程來執行網路操作
-        lifecycleScope.launch(Dispatchers.IO) {
+    fun fetchPrices() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
             try {
-                // 抓取當前 PAXGUSDT 價格
-                val currentPriceResponse = binanceApiService.getCurrentPrice("PAXGUSDT")
-                val currentPrice = currentPriceResponse.price
-
-                // 抓取歷史 K 線數據 (例如，過去 24 小時，每小時一個 K 線)
-                // interval: "1h" 表示 1 小時週期，limit: 24 表示抓取 24 根 K 線
-                val klinesResponse = binanceApiService.getKlines("PAXGUSDT", "1h", 24)
-
-                // 切換到主執行緒更新 UI
-                withContext(Dispatchers.Main) {
-                    // 更新價格顯示
-                    priceTextView.text = String.format(Locale.getDefault(), "當前 PAXGUSDT 價格: %.2f USDT", currentPrice.toFloat())
-
-                    // 設定並更新折線圖
-                    setupLineChart(klinesResponse)
-                }
+                // Fetch 100 1-hour candles for PAXGUSDT
+                val klinesResponse = apiService.getKlines(
+                    symbol = "PAXGUSDT",
+                    interval = "1h",
+                    limit = 100
+                )
+                val klines = klinesResponse.map { KlineData.fromBinanceResponse(it) }
+                _historicalPrices.value = klines
+                _currentPrice.value = klines.lastOrNull()?.closePrice
 
             } catch (e: Exception) {
-                // 錯誤處理：記錄錯誤並在 UI 上顯示錯誤信息
-                Log.e("MainActivity", "抓取數據時發生錯誤: ${e.message}", e)
-                withContext(Dispatchers.Main) {
-                    priceTextView.text = "無法抓取價格: ${e.message}"
+                _errorMessage.value = "Failed to fetch prices: ${e.localizedMessage ?: "Unknown error"}"
+                _currentPrice.value = null
+                _historicalPrices.value = emptyList()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+}
+
+/**
+ * --- Main Activity ---
+ */
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            AiAgentTheme { // Your application's Material3 theme
+                GoldPriceTrackerApp()
+            }
+        }
+    }
+}
+
+/**
+ * --- Gold Price Tracker Composable App ---
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GoldPriceTrackerApp(
+    viewModel: GoldPriceViewModel = viewModel()
+) {
+    val currentPrice by viewModel.currentPrice.collectAsState()
+    val historicalPrices by viewModel.historicalPrices.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+
+    // Vico ChartEntryModelProducer to update chart data
+    val chartEntryModelProducer = remember { ChartEntryModelProducer() }
+
+    // Update chart entries whenever historicalPrices changes
+    LaunchedEffect(historicalPrices) {
+        val entries = historicalPrices.map { kline ->
+            // Use timestamp (milliseconds) for x-axis, close price for y-axis
+            entryOf(x = kline.closeTime.toFloat(), y = kline.closePrice.toFloat())
+        }
+        chartEntryModelProducer.setEntries(listOf(entries))
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("PAXG Gold Tracker") })
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+                Text("Fetching prices...", modifier = Modifier.padding(top = 8.dp))
+            } else if (errorMessage != null) {
+                Text(
+                    text = "Error: $errorMessage",
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Button(onClick = { viewModel.fetchPrices() }) {
+                    Text("Retry")
+                }
+            } else {
+                currentPrice?.let {
+                    Text(
+                        text = "Current PAXG Price: $%.2f".format(it),
+                        style = MaterialTheme.typography.headlineMedium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                }
+
+                if (historicalPrices.isNotEmpty()) {
+                    // Y-axis value formatter for price (e.g., "$1234.56")
+                    val yAxisValueFormatter = remember {
+                        object : ValueFormatter {
+                            override fun formatValue(value: Float, entry: ChartEntryModel): CharSequence {
+                                return "$%.2f".format(value)
+                            }
+                        }
+                    }
+
+                    // X-axis value formatter for timestamp (e.g., "Jan 01 15:30")
+                    val xAxisValueFormatter = remember {
+                        object : ValueFormatter {
+                            private val dateFormat = SimpleDateFormat("MMM dd HH:mm", Locale.getDefault())
+                            override fun formatValue(value: Float, entry: ChartEntryModel): CharSequence {
+                                // 'value' here is the timestamp in milliseconds (as Float)
+                                return dateFormat.format(Date(value.toLong()))
+                            }
+                        }
+                    }
+
+                    // Marker label formatter for detailed info on touch
+                    val markerLabelFormatter = rememberMarkerLabelFormatter { entries ->
+                        val entry = entries.firstOrNull()?.chartEntry
+                        if (entry != null) {
+                            val date = SimpleDateFormat("MMM dd HH:mm", Locale.getDefault()).format(Date(entry.x.toLong()))
+                            val price = "%.2f".format(entry.y)
+                            "Date: $date\nPrice: $$price"
+                        } else {
+                            ""
+                        }
+                    }
+                    val marker = rememberMarker(labelFormatter = markerLabelFormatter)
+
+                    Chart(
+                        chart = rememberLineChart(),
+                        modelProducer = chartEntryModelProducer,
+                        startAxis = rememberStartAxis(
+                            valueFormatter = yAxisValueFormatter,
+                            label = axisLabelComponent(color = MaterialTheme.colorScheme.onSurface),
+                            tick = rememberLineComponent(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                                thickness = 1.dp
+                            ),
+                            guideline = rememberLineComponent(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                thickness = 1.dp
+                            ),
+                            titleComponent = rememberTextComponent(
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textSize = 12.sp,
+                                padding = dimensionsOf(end = 4.dp)
+                            ),
+                            title = "Price (USDT)"
+                        ),
+                        bottomAxis = rememberBottomAxis(
+                            valueFormatter = xAxisValueFormatter,
+                            labelRotationDegrees = 45f, // Rotate labels for better readability
+                            label = axisLabelComponent(color = MaterialTheme.colorScheme.onSurface),
+                            tick = rememberLineComponent(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                                thickness = 1.dp
+                            ),
+                            guideline = rememberLineComponent(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                thickness = 1.dp
+                            ),
+                            titleComponent = rememberTextComponent(
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textSize = 12.sp,
+                                padding = dimensionsOf(top = 4.dp)
+                            ),
+                            title = "Time"
+                        ),
+                        marker = marker,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp)
+                            .padding(top = 8.dp)
+                    )
+                } else if (currentPrice == null) {
+                    Text(
+                        text = "No price data available. Please check your network connection or try again.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
                 }
             }
         }
     }
+}
 
-    // 設定 LineChart 的函數
-    private fun setupLineChart(klines: List<List<Any>>) {
-        val entries = ArrayList<Entry>() // 圖表數據點
-        val labels = ArrayList<String>() // X 軸標籤 (時間)
-        val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault()) // 時間格式化，顯示小時和分鐘
+/**
+ * --- Minimal Theme for AiAgent App ---
+ * This provides a basic Material3 theme structure for direct compilation.
+ * In a real project, these would typically be in separate files (Theme.kt, Color.kt, Type.kt).
+ */
+private val LightColorScheme = lightColorScheme(
+    primary = Color(0xFF673AB7), // DeepPurple 500
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFD0BCFF),
+    onPrimaryContainer = Color(0xFF21005D),
+    secondary = Color(0xFF9C27B0), // Purple 500
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE8DEF8),
+    onSecondaryContainer = Color(0xFF4A4458),
+    tertiary = Color(0xFF3F51B5), // Indigo 500
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFEADDFF),
+    onTertiaryContainer = Color(0xFF381E72),
+    error = Color(0xFFB3261E),
+    onError = Color.White,
+    errorContainer = Color(0xFFF9DEDC),
+    onErrorContainer = Color(0xFF410E0B),
+    background = Color(0xFFFFFBFE),
+    onBackground = Color(0xFF1C1B1F),
+    surface = Color(0xFFFFFBFE),
+    onSurface = Color(0xFF1C1B1F),
+    surfaceVariant = Color(0xFFE7E0EC),
+    onSurfaceVariant = Color(0xFF49454F),
+    outline = Color(0xFF79747E),
+    inverseOnSurface = Color(0xFFF4EFF4),
+    inverseSurface = Color(0xFF313033),
+    inversePrimary = Color(0xFFD0BCFF),
+    surfaceTint = Color(0xFF673AB7),
+    outlineVariant = Color(0xFFCAC4D0),
+    scrim = Color(0xFF000000),
+)
 
-        // 遍歷 K 線數據，建立圖表數據點和時間標籤
-        klines.forEachIndexed { index, kline ->
-            // K 線數據格式: [ 開盤時間, 開盤價, 最高價, 最低價, 收盤價, 成交量, 收盤時間, ... ]
-            val closePrice = (kline[4] as String).toFloat() // 收盤價是字串，需轉換為浮點數
-            val openTime = (kline[0] as Double).toLong() // 開盤時間是 Double 類型的 Unix timestamp，需轉換為 Long
+// A default typography for the theme
+val Typography = Typography(
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.5.sp
+    ),
+    headlineMedium = TextStyle(
+        fontFamily = FontFamily.Default,
+        fontWeight = FontWeight.Bold,
+        fontSize = 24.sp,
+        lineHeight = 32.sp,
+        letterSpacing = 0.sp
+    )
+)
 
-            entries.add(Entry(index.toFloat(), closePrice)) // 添加數據點
-            labels.add(dateFormat.format(Date(openTime))) // 添加時間標籤
-        }
-
-        // 建立 LineDataSet
-        val dataSet = LineDataSet(entries, "PAXGUSDT 收盤價").apply {
-            color = Color.BLUE // 線條顏色
-            valueTextColor = Color.BLACK // 數據點數值文字顏色
-            lineWidth = 2f // 線條寬度
-            circleRadius = 3f // 數據點圓圈半徑
-            setDrawValues(false) // 不在圖表上繪製數據點數值
-            mode = LineDataSet.Mode.CUBIC_BEZIER // 平滑曲線模式
-            setDrawFilled(true) // 繪製填充區域
-            fillColor = Color.parseColor("#40C0FE") // 填充顏色 (淺藍色)
-            fillAlpha = 85 // 填充區域透明度
-        }
-
-        // 建立 LineData 並設定給圖表
-        val lineData = LineData(dataSet)
-        lineChart.data = lineData
-
-        // 自定義圖表外觀和行為
-        lineChart.apply {
-            description.isEnabled = false // 禁用描述文字
-            setTouchEnabled(true) // 啟用觸摸互動
-            isDragEnabled = true // 啟用拖動
-            setScaleEnabled(true) // 啟用縮放
-            setPinchZoom(true) // 啟用兩指縮放
-
-            setBackgroundColor(Color.WHITE) // 背景顏色
-
-            // X 軸設定
-            xAxis.apply {
-                position = XAxis.XAxisPosition.BOTTOM // X 軸位於底部
-                valueFormatter = IndexAxisValueFormatter(labels) // 使用自定義標籤格式化
-                granularity = 1f // X 軸數值之間的最小間隔
-                labelRotationAngle = -45f // 標籤旋轉角度，防止重疊
-                setDrawGridLines(false) // 不繪製網格線
-                setDrawAxisLine(true) // 繪製軸線
-                textColor = Color.BLACK
-                textSize = 10f
-            }
-
-            // 左 Y 軸設定
-            axisLeft.apply {
-                textColor = Color.BLACK
-                textSize = 10f
-                setDrawGridLines(true) // 繪製網格線
-                setDrawAxisLine(true) // 繪製軸線
-            }
-
-            // 禁用右 Y 軸
-            axisRight.isEnabled = false
-
-            // 圖例設定
-            legend.apply {
-                isEnabled = true
-                textColor = Color.BLACK
-                textSize = 12f
-            }
-
-            animateX(1000) // X 軸動畫效果 (1000 毫秒)
-            invalidate() // 刷新圖表
+@Composable
+fun AiAgentTheme(
+    content: @Composable () -> Unit
+) {
+    val colorScheme = LightColorScheme
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            window.statusBarColor = colorScheme.primary.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
         }
     }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
 }
 
-// Retrofit API 接口，定義幣安的 API 端點
-interface BinanceApiService {
-    @GET("api/v3/ticker/price")
-    suspend fun getCurrentPrice(@Query("symbol") symbol: String): PriceResponse
-
-    @GET("api/v3/klines")
-    suspend fun getKlines(
-        @Query("symbol") symbol: String,
-        @Query("interval") interval: String, // 例如 "1h", "1d"
-        @Query("limit") limit: Int // 抓取數據的數量
-    ): List<List<Any>> // K 線數據返回的是一個列表，其中每個元素又是一個包含多種數據類型 (String, Double) 的列表
+/**
+ * --- Preview ---
+ */
+@Preview(showBackground = true)
+@Composable
+fun GoldPriceTrackerPreview() {
+    AiAgentTheme {
+        GoldPriceTrackerApp()
+    }
 }
-
-// 數據類，用於解析當前價格 API 的響應
-data class PriceResponse(
-    val symbol: String,
-    val price: String // 價格通常是字串，因為可能有較多小數位
-)

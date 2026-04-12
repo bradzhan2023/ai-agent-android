@@ -22,7 +22,6 @@ GRADLE_ROOT_FILE = "build.gradle"
 PROPERTIES_FILE = "gradle.properties"
 SETTINGS_GRADLE = "settings.gradle"
 GITHUB_ACTION_FILE = ".github/workflows/android_build.yml"
-README_FILE = "README.md"
 
 if not GEMINI_API_KEY or not GITHUB_TOKEN:
     print("❌ 錯誤：請先設定環境變數 export GEMINI_API_KEY=... 及 GITHUB_TOKEN=...")
@@ -37,7 +36,7 @@ GITHUB_API_HEADERS = {
 # ================= 核心 API 函數 =================
 
 def get_available_model():
-    for version in ["v1", "v1beta"]:
+    for version in ["v1beta", "v1"]:
         url = f"https://generativelanguage.googleapis.com/{version}/models?key={GEMINI_API_KEY}"
         try:
             response = requests.get(url)
@@ -51,7 +50,10 @@ def get_available_model():
 
 def call_gemini_api(prompt, model_id, api_ver):
     url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "topP": 0.8}
+    }
     try:
         response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
         res_json = response.json()
@@ -59,10 +61,11 @@ def call_gemini_api(prompt, model_id, api_ver):
     except Exception as e:
         raise Exception(f"API 請求失敗: {str(e)}")
 
-# ================= GitHub Actions 監控與 Log 抓取 =================
+# ================= GitHub Actions 監控 =================
 
 def wait_for_github_action_result():
     api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/actions/runs"
+    print(f"   [等待 GitHub Action 編譯中...]")
     
     for _ in range(40):
         time.sleep(15)
@@ -79,6 +82,7 @@ def wait_for_github_action_result():
                 if conclusion == "success":
                     return "success", ""
                 else:
+                    # 抓取錯誤 Log 並進行過濾，只留 e: 開頭的編譯錯誤
                     jobs_url = latest_run.get("jobs_url")
                     job_data = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
                     if not job_data.get("jobs"): return "failure", "無法取得 Job 資訊"
@@ -89,22 +93,13 @@ def wait_for_github_action_result():
                     
                     if log_resp.status_code == 200:
                         full_log = log_resp.text
-                        if "> Task :app:compileDebugKotlin" in full_log:
-                            relevant_log = full_log.split("> Task :app:compileDebugKotlin")[-1]
-                        else:
-                            relevant_log = full_log[-10000:]
-                        
-                        lines = relevant_log.split('\n')
-                        error_lines = [l for l in lines if "e: " in l or "error:" in l.lower() or "Compilation error" in l]
-                        
-                        if error_lines:
-                            return "failure", "\n".join(error_lines)
-                        else:
-                            return "failure", relevant_log
+                        # 過濾邏輯：只抓取真正的 Kotlin 編譯錯誤 e:
+                        error_lines = [l for l in full_log.split('\n') if "e: " in l or "error:" in l.lower()]
+                        return "failure", "\n".join(error_lines) if error_lines else full_log[-2000:]
                     else:
                         return "failure", f"無法下載 Log, HTTP {log_resp.status_code}"
             
-            print(f"   [Action 狀態: {status}...]")
+            print(f"   [Action 目前狀態: {status}...]")
         except Exception as e:
             print(f"⚠️ 檢查狀態時錯誤: {e}")
             
@@ -116,182 +111,128 @@ def initialize_android_project():
     os.makedirs(SRC_PATH, exist_ok=True)
     os.makedirs(".github/workflows", exist_ok=True)
     
-    if not os.path.exists("gradlew"):
-        print("🛠️ 正在生成 Gradle Wrapper...")
-        try:
-            subprocess.run(["gradle", "wrapper"], check=True)
-        except:
-            pass
-
     with open(PROPERTIES_FILE, "w") as f:
         f.write("android.useAndroidX=true\nandroid.enableJetifier=true\n")
 
     with open(SETTINGS_GRADLE, "w") as f:
-        f.write("""
-pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google(); mavenCentral(); maven { url 'https://jitpack.io' } 
-    }
-}
-include ':app'
-""")
+        f.write("pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\n"
+                "dependencyResolutionManagement {\n"
+                "    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n"
+                "    repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }\n"
+                "}\nrootProject.name='ai-agent-android'\ninclude ':app'\n")
 
     with open(GRADLE_ROOT_FILE, "w") as f:
-        f.write("""
-buildscript {
-    repositories { google(); mavenCentral() }
-    dependencies {
-        // 修正點：將 # 改為 //，避免 Gradle 編譯錯誤
-        classpath 'com.android.tools.build:gradle:8.4.0'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
-    }
-}
-""")
+        f.write("buildscript {\n"
+                "    repositories { google(); mavenCentral() }\n"
+                "    dependencies {\n"
+                "        classpath 'com.android.tools.build:gradle:8.4.0'\n"
+                "        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'\n"
+                "    }\n}\n")
 
     with open(GRADLE_APP_FILE, "w") as f:
-        f.write(f"""
-apply plugin: 'com.android.application'
-apply plugin: 'org.jetbrains.kotlin.android'
-
-android {{
-    namespace '{PACKAGE_NAME}'
-    compileSdk 34
-    defaultConfig {{
-        applicationId '{PACKAGE_NAME}'
-        minSdk 24
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
-        multiDexEnabled true 
-    }}
-    buildFeatures {{ compose true }}
-    composeOptions {{ kotlinCompilerExtensionVersion '1.5.8' }}
-    compileOptions {{ sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }}
-    kotlinOptions {{ jvmTarget = '17' }}
-}}
-
-dependencies {{
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.activity:activity-compose:1.8.2'
-    implementation platform('androidx.compose:compose-bom:2023.10.01')
-    implementation 'androidx.compose.ui:ui'
-    implementation 'androidx.compose.material3:material3'
-    implementation 'androidx.compose.foundation:foundation'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    implementation 'com.google.code.gson:gson:2.10.1'
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
-    implementation 'androidx.multidex:multidex:2.0.1'
-}}
-""")
+        f.write(f"apply plugin: 'com.android.application'\napply plugin: 'org.jetbrains.kotlin.android'\n"
+                f"android {{\n    namespace '{PACKAGE_NAME}'\n    compileSdk 34\n"
+                f"    defaultConfig {{ applicationId '{PACKAGE_NAME}'; minSdk 24; targetSdk 34; versionCode 1; versionName '1.0'; multiDexEnabled true }}\n"
+                f"    buildFeatures {{ compose true }}\n"
+                f"    composeOptions {{ kotlinCompilerExtensionVersion '1.5.8' }}\n"
+                f"    compileOptions {{ sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }}\n"
+                f"    kotlinOptions {{ jvmTarget = '17' }}\n}}\n"
+                f"dependencies {{\n"
+                f"    implementation 'androidx.core:core-ktx:1.12.0'\n"
+                f"    implementation 'androidx.activity:activity-compose:1.8.2'\n"
+                f"    implementation platform('androidx.compose:compose-bom:2023.10.01')\n"
+                f"    implementation 'androidx.compose.ui:ui'\n"
+                f"    implementation 'androidx.compose.material3:material3'\n"
+                f"    implementation 'com.squareup.okhttp3:okhttp:4.12.0'\n"
+                f"    implementation 'com.google.code.gson:gson:2.10.1'\n"
+                f"    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'\n"
+                f"    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2'\n"
+                f"}}\n")
 
     with open(MANIFEST_FILE, "w") as f:
-        f.write(f"""<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="AI Agent App" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>""")
+        f.write(f'<?xml version="1.0" encoding="utf-8"?>\n<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                f'    <uses-permission android:name="android.permission.INTERNET" />\n'
+                f'    <application android:label="AI App" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">\n'
+                f'        <activity android:name=".MainActivity" android:exported="true">\n'
+                f'            <intent-filter>\n'
+                f'                <action android:name="android.intent.action.MAIN" />\n'
+                f'                <category android:name="android.intent.category.LAUNCHER" />\n'
+                f'            </intent-filter>\n'
+                f'        </activity>\n'
+                f'    </application>\n</manifest>')
 
     with open(GITHUB_ACTION_FILE, "w") as f:
-        f.write("""
-name: Android Build APK
-on: [push]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-      - name: Build with Gradle
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -Pkotlin.compiler.execution.strategy="in-process"
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-""")
+        f.write("name: Android Build\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: actions/checkout@v4\n"
+                "      - uses: actions/setup-java@v4\n"
+                "        with: { java-version: '17', distribution: 'temurin' }\n"
+                "      - name: Build\n"
+                "        run: |\n"
+                "          chmod +x gradlew\n"
+                "          ./gradlew assembleDebug --no-daemon\n")
 
-# ================= Agent 開發邏輯 =================
+# ================= Agent 開發與修復邏輯 =================
 
-def developer_agent_android(task, model_id, api_ver):
+def developer_agent_android(task, model_id, api_ver, context_log=""):
     system_instruction = (
-        f"你是一個 Android 專家。請為 package {PACKAGE_NAME} 撰寫 MainActivity.kt。\n"
-        "【技術要求】:\n"
-        "1. 使用 Material3 Compose。\n"
-        "2. 必須包含所有需要的 Import。\n"
-        "3. 嚴禁使用 getAxisLabel (MPAndroidChart)，請改用 valueFormatter。\n"
-        "4. 確保代碼可以直接編譯，不要包含 Markdown 代碼塊標籤，直接輸出代碼內容。"
+        f"你是一個 Android 與 Jetpack Compose 專家。請為 package {PACKAGE_NAME} 撰寫完整的 MainActivity.kt。\n"
+        "【強制規範】:\n"
+        "1. 只輸出 Kotlin 代碼，嚴禁包含 build.gradle 或 XML 配置內容。\n"
+        "2. 必須包含所有需要的 import，特別是 androidx.compose.* 與 androidx.lifecycle.viewmodel.compose.*。\n"
+        "3. MPAndroidChart 規範：使用 3.1.0 語法。例如使用 chart.xAxis.setDrawGridLines(false) 而非直接調用。\n"
+        "4. 確保所有 Composable 都在正確的 @Composable 作用域內調用。\n"
+        "5. 嚴禁使用 Markdown 代碼塊標籤，從 'package com.example.aiagent' 開始直接輸出代碼。"
     )
-    return call_gemini_api(f"{system_instruction}\n任務：{task}", model_id, api_ver)
+    
+    prompt = f"{system_instruction}\n任務目標：{task}"
+    if context_log:
+        prompt += f"\n\n--- 這是目前的編譯錯誤，請根據此錯誤修復 ---\n{context_log}"
+        
+    return call_gemini_api(prompt, model_id, api_ver)
 
 def push_to_github(task_name, app_code):
     print(f"🚀 同步代碼至 GitHub...")
+    # 確保不會誤入 Markdown 標籤
     clean_code = app_code.replace("```kotlin", "").replace("```", "").strip()
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(clean_code)
     try:
-        repo = Repo(".")
-        if not os.path.exists(".git"): repo = Repo.init(".")
+        repo = Repo(".") if os.path.exists(".git") else Repo.init(".")
         repo.git.add(A=True)
-        repo.index.commit(f"Update: {task_name}")
+        repo.index.commit(f"Dev: {task_name}")
         repo.git.push(GITHUB_REPO_URL, 'main', force=True)
         print(f"✅ 推送成功")
     except Exception as e:
         print(f"❌ Git 失敗: {e}")
 
 def auto_fix_loop(task, model_id, api_ver, max_retries=3):
-    print("🛠️ 正在生成初始代碼...")
+    print("🛠️ 正在生成代碼...")
     code = developer_agent_android(task, model_id, api_ver)
-    push_to_github("Initial Commit", code)
+    push_to_github("Initial", code)
     
     for i in range(max_retries):
-        print(f"🔄 等待結果 (第 {i+1}/{max_retries} 次嘗試)...")
         status, log_output = wait_for_github_action_result()
-        
         if status == "success":
-            print("✨ 編譯成功！")
+            print("✨ 編譯成功！APK 已生成。")
             return True
         
-        print(f"❌ 編譯失敗，正在請求修復...")
-        
-        fix_prompt = (
-            f"原任務：{task}\n\n"
-            f"--- 這是編譯器噴出的真實錯誤日誌 ---\n{log_output}\n---\n\n"
-            f"請根據上述錯誤內容（特別是標註為 'e:' 的行或 MainActivity.kt 的報錯行號）修復代碼。"
-            f"僅輸出完整的 MainActivity.kt 代碼。"
-        )
-        code = call_gemini_api(fix_prompt, model_id, api_ver)
-        push_to_github(f"Auto-fix Attempt {i+1}", code)
+        print(f"❌ 第 {i+1} 次嘗試失敗，分析錯誤中...")
+        code = developer_agent_android(task, model_id, api_ver, context_log=log_output)
+        push_to_github(f"Fix-Attempt-{i+1}", code)
         
     return False
 
 if __name__ == "__main__":
     if len(sys.argv) < 2: 
-        print("使用方式: python agent_android_deploy.py '你的任務描述'")
+        print("Usage: python agent_android_deploy.py 'Task Description'")
         exit(1)
+    
     my_task = sys.argv[1]
     initialize_android_project()
     try:
-        model_id, api_ver = get_available_model()
-        if auto_fix_loop(my_task, model_id, api_ver):
-            print("📝 完成！")
+        mid, ver = get_available_model()
+        if auto_fix_loop(my_task, mid, ver):
+            print("📝 完成任務！")
         else:
-            print("😢 嘗試次數已達上限，請檢查日誌手動調整。")
+            print("😢 無法修復編譯錯誤，請手動介入。")
     except Exception as e:
-        print(f"💥 錯誤: {e}")
+        print(f"💥 崩潰: {e}")

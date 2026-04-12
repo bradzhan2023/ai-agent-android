@@ -50,7 +50,7 @@ def get_available_model():
 
 def call_gemini_api(prompt, model_id, api_ver):
     url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={GEMINI_API_KEY}"
-    # 【修改點】加入 safetySettings 以避免 'candidates' 報錯
+    # 【關鍵修正】加入 safetySettings 以避免 API 因為內容審核而拒絕回傳 candidates
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2, "topP": 0.8},
@@ -65,9 +65,9 @@ def call_gemini_api(prompt, model_id, api_ver):
         response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
         res_json = response.json()
         
-        # 【修改點】增加欄位檢查，避免直接報 KeyError
+        # 【關鍵修正】增加欄位檢查，若被阻擋則拋出具體錯誤訊息
         if 'candidates' not in res_json:
-            error_msg = res_json.get('error', {}).get('message', '未知錯誤（可能是被安全性篩選阻擋）')
+            error_msg = res_json.get('error', {}).get('message', '未知錯誤（可能是被安全性篩選阻擋，請檢查 Prompt）')
             raise Exception(f"Gemini 回傳異常: {error_msg}")
             
         return res_json['candidates'][0]['content']['parts'][0]['text']
@@ -132,7 +132,7 @@ def initialize_android_project():
                 "    repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }\n"
                 "}\nrootProject.name='ai-agent-android'\ninclude ':app'\n")
 
-    # 【修改點】根目錄 build.gradle：加入 kotlin-serialization classpath
+    # 【關鍵修正】根目錄 build.gradle：加入 kotlin-serialization classpath
     with open(GRADLE_ROOT_FILE, "w") as f:
         f.write("buildscript {\n"
                 "    repositories { google(); mavenCentral() }\n"
@@ -142,7 +142,7 @@ def initialize_android_project():
                 "        classpath 'org.jetbrains.kotlin:kotlin-serialization:1.9.22'\n"
                 "    }\n}\n")
 
-    # 【修改點】App build.gradle：套用插件並加入 kotlinx-serialization 依賴
+    # 【關鍵修正】App build.gradle：套用 kotlinx-serialization 插件與 implementation
     with open(GRADLE_APP_FILE, "w") as f:
         f.write(f"apply plugin: 'com.android.application'\n"
                 f"apply plugin: 'org.jetbrains.kotlin.android'\n"
@@ -209,6 +209,7 @@ def developer_agent_android(task, model_id, api_ver, context_log=""):
 
 def push_to_github(task_name, app_code):
     print(f"🚀 同步代碼至 GitHub...")
+    # 確保代碼純淨
     clean_code = app_code.replace("```kotlin", "").replace("```", "").strip()
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(clean_code)
     try:

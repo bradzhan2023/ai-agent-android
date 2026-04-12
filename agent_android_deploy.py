@@ -50,13 +50,26 @@ def get_available_model():
 
 def call_gemini_api(prompt, model_id, api_ver):
     url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={GEMINI_API_KEY}"
+    # 【修改點】加入 safetySettings 以避免 'candidates' 報錯
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "topP": 0.8}
+        "generationConfig": {"temperature": 0.2, "topP": 0.8},
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ]
     }
     try:
         response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
         res_json = response.json()
+        
+        # 【修改點】增加欄位檢查，避免直接報 KeyError
+        if 'candidates' not in res_json:
+            error_msg = res_json.get('error', {}).get('message', '未知錯誤（可能是被安全性篩選阻擋）')
+            raise Exception(f"Gemini 回傳異常: {error_msg}")
+            
         return res_json['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
         raise Exception(f"API 請求失敗: {str(e)}")
@@ -82,7 +95,6 @@ def wait_for_github_action_result():
                 if conclusion == "success":
                     return "success", ""
                 else:
-                    # 抓取錯誤 Log 並進行過濾，只留 e: 開頭的編譯錯誤
                     jobs_url = latest_run.get("jobs_url")
                     job_data = requests.get(jobs_url, headers=GITHUB_API_HEADERS).json()
                     if not job_data.get("jobs"): return "failure", "無法取得 Job 資訊"
@@ -93,7 +105,6 @@ def wait_for_github_action_result():
                     
                     if log_resp.status_code == 200:
                         full_log = log_resp.text
-                        # 過濾邏輯：只抓取真正的 Kotlin 編譯錯誤 e:
                         error_lines = [l for l in full_log.split('\n') if "e: " in l or "error:" in l.lower()]
                         return "failure", "\n".join(error_lines) if error_lines else full_log[-2000:]
                     else:
@@ -121,16 +132,21 @@ def initialize_android_project():
                 "    repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }\n"
                 "}\nrootProject.name='ai-agent-android'\ninclude ':app'\n")
 
+    # 【修改點】根目錄 build.gradle：加入 kotlin-serialization classpath
     with open(GRADLE_ROOT_FILE, "w") as f:
         f.write("buildscript {\n"
                 "    repositories { google(); mavenCentral() }\n"
                 "    dependencies {\n"
                 "        classpath 'com.android.tools.build:gradle:8.4.0'\n"
                 "        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'\n"
+                "        classpath 'org.jetbrains.kotlin:kotlin-serialization:1.9.22'\n"
                 "    }\n}\n")
 
+    # 【修改點】App build.gradle：套用插件並加入 kotlinx-serialization 依賴
     with open(GRADLE_APP_FILE, "w") as f:
-        f.write(f"apply plugin: 'com.android.application'\napply plugin: 'org.jetbrains.kotlin.android'\n"
+        f.write(f"apply plugin: 'com.android.application'\n"
+                f"apply plugin: 'org.jetbrains.kotlin.android'\n"
+                f"apply plugin: 'kotlinx-serialization'\n"
                 f"android {{\n    namespace '{PACKAGE_NAME}'\n    compileSdk 34\n"
                 f"    defaultConfig {{ applicationId '{PACKAGE_NAME}'; minSdk 24; targetSdk 34; versionCode 1; versionName '1.0'; multiDexEnabled true }}\n"
                 f"    buildFeatures {{ compose true }}\n"
@@ -147,6 +163,7 @@ def initialize_android_project():
                 f"    implementation 'com.google.code.gson:gson:2.10.1'\n"
                 f"    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'\n"
                 f"    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2'\n"
+                f"    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'\n"
                 f"}}\n")
 
     with open(MANIFEST_FILE, "w") as f:
@@ -178,8 +195,8 @@ def developer_agent_android(task, model_id, api_ver, context_log=""):
         f"你是一個 Android 與 Jetpack Compose 專家。請為 package {PACKAGE_NAME} 撰寫完整的 MainActivity.kt。\n"
         "【強制規範】:\n"
         "1. 只輸出 Kotlin 代碼，嚴禁包含 build.gradle 或 XML 配置內容。\n"
-        "2. 必須包含所有需要的 import，特別是 androidx.compose.* 與 androidx.lifecycle.viewmodel.compose.*。\n"
-        "3. MPAndroidChart 規範：使用 3.1.0 語法。例如使用 chart.xAxis.setDrawGridLines(false) 而非直接調用。\n"
+        "2. 必須包含所有需要的 import，特別是 kotlinx.serialization.Serializable 而非 java.io.Serializable。\n"
+        "3. MPAndroidChart 規範：使用 3.1.0 語法。例如使用 chart.xAxis.setDrawGridLines(false)。\n"
         "4. 確保所有 Composable 都在正確的 @Composable 作用域內調用。\n"
         "5. 嚴禁使用 Markdown 代碼塊標籤，從 'package com.example.aiagent' 開始直接輸出代碼。"
     )
@@ -192,7 +209,6 @@ def developer_agent_android(task, model_id, api_ver, context_log=""):
 
 def push_to_github(task_name, app_code):
     print(f"🚀 同步代碼至 GitHub...")
-    # 確保不會誤入 Markdown 標籤
     clean_code = app_code.replace("```kotlin", "").replace("```", "").strip()
     with open(APP_FILE, "w", encoding="utf-8") as f: f.write(clean_code)
     try:

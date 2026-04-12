@@ -18,6 +18,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.aiagent.ui.theme.AIAgentTheme
 import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.AxisBase
+import com.github.mikephil.charting.components.Description
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
@@ -43,79 +45,110 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 
 // 1. Data Models
-/**
- * Represents a single KLine (candlestick) data point from Binance.
- * The Binance API returns a list of lists of strings, so this data class
- * is primarily for conceptual understanding; direct parsing happens in the repository.
- */
 @Serializable
-data class KLineData(
-    val openTime: Long,
-    val openPrice: String,
-    val highPrice: String,
-    val lowPrice: String,
-    val closePrice: String,
-    val volume: String,
-    val closeTime: Long,
-    val quoteAssetVolume: String,
-    val numberOfTrades: Long,
-    val takerBuyBaseAssetVolume: String,
-    val takerBuyQuoteAssetVolume: String,
-    val ignore: String
-)
-
-/**
- * Simplified data class for a price point, used in the UI state.
- */
-data class PricePoint(
-    val timestamp: Long, // Unix timestamp in milliseconds
-    val price: Float
-)
-
-// 2. Network Interface for Binance API
-interface BinanceApiService {
-    @GET("api/v3/klines")
-    suspend fun getKlines(
-        @Query("symbol") symbol: String,
-        @Query("interval") interval: String,
-        @Query("limit") limit: Int = 100
-    ): List<List<String>> // Binance Klines API returns a list of lists of strings
-}
-
-// 3. Repository for data fetching logic
-class PriceRepository(private val apiService: BinanceApiService) {
-    /**
-     * Fetches KLine data for PAXGUSDT and converts it into a list of PricePoint objects.
-     * @param interval The candlestick interval (e.g., "1m", "1h", "1d").
-     * @param limit The number of data points to retrieve.
-     * @return A list of PricePoint objects, or an empty list if an error occurs.
-     */
-    suspend fun getPAXGUSDTKlines(interval: String, limit: Int): List<PricePoint> {
-        val rawData = apiService.getKlines("PAXGUSDT", interval, limit)
-        // The Binance Klines API returns data in a specific order:
-        // [0] Open time
-        // [1] Open
-        // [2] High
-        // [3] Low
-        // [4] Close
-        // ... and so on. We need Open time and Close price.
-        return rawData.map { kline ->
-            PricePoint(
-                timestamp = kline[0].toLong(), // Open time (milliseconds)
-                price = kline[4].toFloat()     // Close price
+data class BinanceKLineResponse(
+    val data: List<List<String>> // Raw data from Binance API
+) {
+    // Helper to parse the raw string data into a more usable format
+    fun toKLineDataList(): List<KLineData> {
+        return data.map {
+            KLineData(
+                openTime = it[0].toLong(),
+                openPrice = it[1].toFloat(),
+                highPrice = it[2].toFloat(),
+                lowPrice = it[3].toFloat(),
+                closePrice = it[4].toFloat(),
+                volume = it[5].toFloat(),
+                closeTime = it[6].toLong(),
+                quoteAssetVolume = it[7].toFloat(),
+                numberOfTrades = it[8].toInt(),
+                takerBuyBaseAssetVolume = it[9].toFloat(),
+                takerBuyQuoteAssetVolume = it[10].toFloat(),
+                ignore = it[11].toFloat()
             )
         }
     }
 }
 
-// 4. ViewModel to manage UI-related data and logic
+@Serializable
+data class KLineData(
+    val openTime: Long,
+    val openPrice: Float,
+    val highPrice: Float,
+    val lowPrice: Float,
+    val closePrice: Float,
+    val volume: Float,
+    val closeTime: Long,
+    val quoteAssetVolume: Float,
+    val numberOfTrades: Int,
+    val takerBuyBaseAssetVolume: Float,
+    val takerBuyQuoteAssetVolume: Float,
+    val ignore: Float
+)
+
+// 2. Binance API Interface
+interface BinanceApiService {
+    @GET("api/v3/klines")
+    suspend fun getKlines(
+        @Query("symbol") symbol: String,
+        @Query("interval") interval: String,
+        @Query("limit") limit: Int
+    ): List<List<String>> // Binance returns a list of lists of strings
+}
+
+// 3. Network Client Setup
+object RetrofitClient {
+    private const val BASE_URL = "https://api.binance.com/"
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .addInterceptor(HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY // Log request and response bodies
+        })
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val retrofit: Retrofit = Retrofit.Builder()
+        .baseUrl(BASE_URL)
+        .client(okHttpClient)
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
+
+    val binanceApiService: BinanceApiService by lazy {
+        retrofit.create(BinanceApiService::class.java)
+    }
+}
+
+// 4. Repository
+class PriceRepository(private val apiService: BinanceApiService) {
+    suspend fun getPAXGUSDTPrice(interval: String, limit: Int): List<KLineData> {
+        return apiService.getKlines("PAXGUSDT", interval, limit).map {
+            KLineData(
+                openTime = it[0].toLong(),
+                openPrice = it[1].toFloat(),
+                highPrice = it[2].toFloat(),
+                lowPrice = it[3].toFloat(),
+                closePrice = it[4].toFloat(),
+                volume = it[5].toFloat(),
+                closeTime = it[6].toLong(),
+                quoteAssetVolume = it[7].toFloat(),
+                numberOfTrades = it[8].toInt(),
+                takerBuyBaseAssetVolume = it[9].toFloat(),
+                takerBuyQuoteAssetVolume = it[10].toFloat(),
+                ignore = it[11].toFloat()
+            )
+        }
+    }
+}
+
+// 5. ViewModel
 class GoldPriceViewModel(private val repository: PriceRepository) : ViewModel() {
-
-    private val _currentPrice = MutableStateFlow<Float?>(null)
-    val currentPrice: StateFlow<Float?> = _currentPrice.asStateFlow()
-
-    private val _historicalPrices = MutableStateFlow<List<PricePoint>>(emptyList())
-    val historicalPrices: StateFlow<List<PricePoint>> = _historicalPrices.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -123,23 +156,25 @@ class GoldPriceViewModel(private val repository: PriceRepository) : ViewModel() 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _currentPrice = MutableStateFlow<Float?>(null)
+    val currentPrice: StateFlow<Float?> = _currentPrice.asStateFlow()
+
+    private val _historicalPrices = MutableStateFlow<List<KLineData>>(emptyList())
+    val historicalPrices: StateFlow<List<KLineData>> = _historicalPrices.asStateFlow()
+
     init {
-        fetchGoldPrices()
+        fetchPriceData()
     }
 
-    /**
-     * Fetches the latest and historical PAXGUSDT prices.
-     */
-    fun fetchGoldPrices() {
+    fun fetchPriceData() {
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
             try {
-                // Fetch 1-hour interval data for the chart (e.g., last 100 hours)
-                val klines = repository.getPAXGUSDTKlines("1h", 100)
-                _historicalPrices.value = klines
-                _currentPrice.value = klines.lastOrNull()?.price
-
+                // Fetch 1-hour interval data for the last 100 hours
+                val data = repository.getPAXGUSDTPrice("1h", 100)
+                _historicalPrices.value = data
+                _currentPrice.value = data.lastOrNull()?.closePrice
             } catch (e: HttpException) {
                 _errorMessage.value = "Network error: ${e.code()} - ${e.message()}"
             } catch (e: IOException) {
@@ -152,9 +187,7 @@ class GoldPriceViewModel(private val repository: PriceRepository) : ViewModel() 
         }
     }
 
-    /**
-     * Factory for creating [GoldPriceViewModel] with dependencies.
-     */
+    // ViewModel Factory to inject repository
     class Factory(private val repository: PriceRepository) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -166,66 +199,115 @@ class GoldPriceViewModel(private val repository: PriceRepository) : ViewModel() 
     }
 }
 
-// 5. MainActivity - Entry point of the application
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+// 6. MPAndroidChart Value Formatters
+class DateValueFormatter(private val pattern: String) : ValueFormatter() {
+    private val dateFormat = SimpleDateFormat(pattern, Locale.getDefault())
 
-        // Setup Retrofit and its dependencies for network requests
-        val json = Json { ignoreUnknownKeys = true } // Configure JSON parser
-        val contentType = "application/json".toMediaType() // Define content type for Retrofit converter
-        val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY } // For network request logging
-        val okHttpClient = OkHttpClient.Builder()
-            .addInterceptor(logging)
-            .connectTimeout(30, TimeUnit.SECONDS) // Set connection timeout
-            .readTimeout(30, TimeUnit.SECONDS)    // Set read timeout
-            .writeTimeout(30, TimeUnit.SECONDS)   // Set write timeout
-            .build()
-
-        val retrofit = Retrofit.Builder()
-            .baseUrl("https://api.binance.com/") // Binance API base URL
-            .client(okHttpClient)
-            .addConverterFactory(json.asConverterFactory(contentType)) // Use kotlinx.serialization for JSON
-            .build()
-
-        val apiService = retrofit.create(BinanceApiService::class.java)
-        val repository = PriceRepository(apiService)
-        val viewModelFactory = GoldPriceViewModel.Factory(repository)
-
-        setContent {
-            AIAgentTheme {
-                // A surface container using the 'background' color from the theme
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    // Obtain the ViewModel using the factory
-                    val viewModel: GoldPriceViewModel =
-                        ViewModelProvider(this, viewModelFactory)[GoldPriceViewModel::class.java]
-                    GoldPriceTrackerScreen(viewModel = viewModel)
-                }
-            }
-        }
+    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+        // value is the timestamp in milliseconds
+        return dateFormat.format(Date(value.toLong()))
     }
 }
 
-// 6. UI Composables
-/**
- * The main screen for tracking PAXGUSDT prices.
- * Displays current price, loading state, error messages, and a historical price chart.
- */
-@OptIn(ExperimentalMaterial3Api::class) // For TopAppBar
+class PriceValueFormatter : ValueFormatter() {
+    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+        return String.format(Locale.getDefault(), "%.2f", value)
+    }
+}
+
+// 7. Composable for Line Chart
+@Composable
+fun GoldPriceLineChart(historicalPrices: List<KLineData>) {
+    val context = LocalContext.current
+    AndroidView(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(300.dp),
+        factory = { ctx ->
+            LineChart(ctx).apply {
+                description = Description().apply { text = "" } // Hide description label
+                setTouchEnabled(true)
+                isDragEnabled = true
+                setScaleEnabled(true)
+                setPinchZoom(true)
+                setDrawGridBackground(false)
+                setBackgroundColor(Color.WHITE)
+
+                // X-axis configuration
+                xAxis.apply {
+                    position = XAxis.XAxisPosition.BOTTOM
+                    setDrawGridLines(false) // As per requirement
+                    setDrawAxisLine(true)
+                    textColor = Color.BLACK
+                    valueFormatter = DateValueFormatter("HH:mm") // Format time
+                    labelRotationAngle = -45f // Rotate labels for better readability
+                    setLabelCount(5, true) // Show approximately 5 labels, force interval
+                }
+
+                // Left Y-axis configuration
+                axisLeft.apply {
+                    setDrawGridLines(true)
+                    setDrawAxisLine(true)
+                    textColor = Color.BLACK
+                    valueFormatter = PriceValueFormatter()
+                }
+
+                // Right Y-axis configuration (disable it)
+                axisRight.isEnabled = false
+
+                // Legend configuration
+                legend.apply {
+                    isEnabled = true
+                    textColor = Color.BLACK
+                }
+
+                // No data text
+                setNoDataText("Loading chart data...")
+                setNoDataTextColor(Color.GRAY)
+            }
+        },
+        update = { chart ->
+            if (historicalPrices.isNotEmpty()) {
+                val entries = historicalPrices.mapIndexed { index, data ->
+                    Entry(data.openTime.toFloat(), data.closePrice)
+                }
+
+                val dataSet = LineDataSet(entries, "PAXGUSDT Price").apply {
+                    color = Color.BLUE
+                    setCircleColor(Color.BLUE)
+                    lineWidth = 2f
+                    circleRadius = 3f
+                    setDrawCircleHole(false)
+                    valueTextSize = 0f // Hide value text on points
+                    mode = LineDataSet.Mode.LINEAR // Smooth line
+                    setDrawFilled(true) // Fill area below the line
+                    fillColor = Color.BLUE
+                    fillAlpha = 50
+                }
+
+                val lineData = LineData(dataSet)
+                chart.data = lineData
+                chart.invalidate() // Refresh chart
+            } else {
+                chart.clear()
+                chart.invalidate()
+            }
+        }
+    )
+}
+
+// 8. Main Screen Composable
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GoldPriceTrackerScreen(viewModel: GoldPriceViewModel) {
-    // Collect states from ViewModel
-    val currentPrice by viewModel.currentPrice.collectAsState()
-    val historicalPrices by viewModel.historicalPrices.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val currentPrice by viewModel.currentPrice.collectAsState()
+    val historicalPrices by viewModel.historicalPrices.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("PAXGUSDT Price Tracker") })
+            TopAppBar(title = { Text("PAXGUSDT 金價追蹤") })
         }
     ) { paddingValues ->
         Column(
@@ -238,197 +320,115 @@ fun GoldPriceTrackerScreen(viewModel: GoldPriceViewModel) {
         ) {
             if (isLoading) {
                 CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+                Text("載入中...", style = MaterialTheme.typography.bodyLarge)
             }
 
-            errorMessage?.let { message ->
+            errorMessage?.let {
                 Text(
-                    text = "Error: $message",
+                    text = "錯誤: $it",
                     color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(16.dp)
                 )
             }
 
-            currentPrice?.let { price ->
+            currentPrice?.let {
                 Text(
-                    text = "Current PAXGUSDT Price: $%.2f".format(price),
+                    text = "當前 PAXGUSDT 價格: $%.2f".format(Locale.getDefault(), it),
                     style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
             } ?: run {
                 if (!isLoading && errorMessage == null) {
                     Text(
-                        text = "Loading price...",
+                        text = "無價格數據",
                         style = MaterialTheme.typography.headlineMedium,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Button(
-                onClick = { viewModel.fetchGoldPrices() },
+                onClick = { viewModel.fetchPriceData() },
                 enabled = !isLoading,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Refresh Price")
+                Text("重新整理")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             if (historicalPrices.isNotEmpty()) {
-                Text(
-                    text = "Historical Prices (Last ${historicalPrices.size} hours)",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                PriceLineChart(historicalPrices = historicalPrices)
+                GoldPriceLineChart(historicalPrices = historicalPrices)
             } else if (!isLoading && errorMessage == null) {
                 Text(
-                    text = "No historical data available.",
-                    style = MaterialTheme.typography.bodyLarge
+                    text = "無歷史數據可顯示圖表",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(16.dp)
                 )
             }
         }
     }
 }
 
-/**
- * Composable that displays a LineChart using MPAndroidChart library.
- * @param historicalPrices The list of price points to display on the chart.
- */
-@Composable
-fun PriceLineChart(historicalPrices: List<PricePoint>) {
-    // Convert PricePoint list to MPAndroidChart Entry list.
-    // The x-value for Entry will be the index, and y-value will be the price.
-    // The actual timestamp will be used for X-axis labels via a ValueFormatter.
-    val entries = remember(historicalPrices) {
-        historicalPrices.mapIndexed { index, pricePoint ->
-            Entry(index.toFloat(), pricePoint.price)
+// 9. MainActivity
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val repository = PriceRepository(RetrofitClient.binanceApiService)
+        val viewModelFactory = GoldPriceViewModel.Factory(repository)
+
+        setContent {
+            AIAgentTheme {
+                // A surface container using the 'background' color from the theme
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    val viewModel: GoldPriceViewModel =
+                        androidx.lifecycle.viewmodel.compose.viewModel(factory = viewModelFactory)
+                    GoldPriceTrackerScreen(viewModel = viewModel)
+                }
+            }
         }
     }
-
-    AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp),
-        factory = { ctx ->
-            LineChart(ctx).apply {
-                description.isEnabled = false // Disable chart description
-                setTouchEnabled(true)         // Enable touch gestures
-                setPinchZoom(true)            // Enable pinch zoom
-                setDrawGridBackground(false)  // Do not draw a background grid
-
-                // X-Axis configuration
-                xAxis.apply {
-                    position = XAxis.XAxisPosition.BOTTOM // Position X-axis at the bottom
-                    setDrawGridLines(false)               // Do not draw grid lines for X-axis
-                    setDrawAxisLine(true)                 // Draw the X-axis line
-                    textColor = Color.BLACK
-                    // Custom formatter for X-axis labels to show date/time
-                    valueFormatter = object : ValueFormatter() {
-                        private val dateFormat = SimpleDateFormat("HH:mm\ndd/MM", Locale.getDefault())
-                        override fun getAxisLabel(value: Float, axis: XAxis?): String {
-                            // Map the chart's float index back to the original timestamp
-                            // This assumes entries are ordered by time and index corresponds to position in historicalPrices
-                            if (value.toInt() >= 0 && value.toInt() < historicalPrices.size) {
-                                val timestamp = historicalPrices[value.toInt()].timestamp
-                                return dateFormat.format(Date(timestamp))
-                            }
-                            return ""
-                        }
-                    }
-                    labelRotationAngle = -45f // Rotate labels for better readability
-                    granularity = 1f          // Only show integer indices (one label per data point)
-                }
-
-                // Left Y-Axis configuration
-                axisLeft.apply {
-                    setDrawGridLines(true) // Draw grid lines for Y-axis
-                    setDrawAxisLine(true)  // Draw the Y-axis line
-                    textColor = Color.BLACK
-                    // Custom formatter for Y-axis labels to show price with 2 decimal places
-                    valueFormatter = object : ValueFormatter() {
-                        override fun getAxisLabel(value: Float, axis: com.github.mikephil.charting.components.YAxis?): String {
-                            return "%.2f".format(value)
-                        }
-                    }
-                }
-
-                // Right Y-Axis configuration (disable it)
-                axisRight.isEnabled = false
-
-                // Legend configuration
-                legend.apply {
-                    form = com.github.mikephil.charting.components.Legend.LegendForm.CIRCLE
-                    textColor = Color.BLACK
-                }
-
-                // Animation for chart loading
-                animateX(750) // Animate X-axis for 750 milliseconds
-            }
-        },
-        update = { chart ->
-            if (entries.isNotEmpty()) {
-                val dataSet = LineDataSet(entries, "PAXGUSDT Price").apply {
-                    color = Color.BLUE
-                    setCircleColor(Color.BLUE)
-                    lineWidth = 2f
-                    circleRadius = 3f
-                    setDrawCircleHole(false)
-                    valueTextSize = 9f
-                    valueTextColor = Color.BLACK
-                    mode = LineDataSet.Mode.LINEAR // or CUBIC_BEZIER for smoother lines
-                    setDrawValues(false) // Do not draw individual value labels on the chart
-                }
-
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-                chart.invalidate() // Refresh the chart to display new data
-            } else {
-                chart.clear() // Clear the chart if no data is available
-            }
-        }
-    )
 }
 
-// Preview Composable for Android Studio
+// 10. Preview
 @Preview(showBackground = true)
 @Composable
-fun DefaultPreview() {
+fun GoldPriceTrackerScreenPreview() {
     AIAgentTheme {
-        // Create a dummy repository and ViewModel for preview purposes
-        val dummyRepository = object : PriceRepository(object : BinanceApiService {
-            override suspend fun getKlines(symbol: String, interval: String, limit: Int): List<List<String>> {
-                // Provide dummy data for preview
+        // For preview, we can create a mock ViewModel or pass mock data directly
+        // Here, we'll create a simple mock repository and ViewModel for demonstration
+        val mockRepository = object : PriceRepository(RetrofitClient.binanceApiService) {
+            override suspend fun getPAXGUSDTPrice(interval: String, limit: Int): List<KLineData> {
+                // Return some mock data for preview
                 val now = System.currentTimeMillis()
-                return (0 until 10).map { i ->
-                    val timestamp = now - (10 - i) * 3600 * 1000L // 1 hour intervals
-                    val price = 2000f + (i * 5f) + (Math.random() - 0.5).toFloat() * 10f
-                    listOf(
-                        timestamp.toString(), "%.2f".format(price), "%.2f".format(price + 10),
-                        "%.2f".format(price - 10), "%.2f".format(price), "100",
-                        (timestamp + 3600 * 1000L).toString(), "1000", "10", "50", "50", "ignore"
+                return (0..10).map { i ->
+                    KLineData(
+                        openTime = now - (10 - i) * 3600 * 1000, // 1 hour intervals
+                        openPrice = 2000f + i * 5f,
+                        highPrice = 2010f + i * 5f,
+                        lowPrice = 1990f + i * 5f,
+                        closePrice = 2005f + i * 5f,
+                        volume = 100f,
+                        closeTime = now - (10 - i) * 3600 * 1000 + 3600 * 1000 - 1,
+                        quoteAssetVolume = 100f,
+                        numberOfTrades = 10,
+                        takerBuyBaseAssetVolume = 50f,
+                        takerBuyQuoteAssetVolume = 50f,
+                        ignore = 0f
                     )
                 }
             }
-        }) {}
-        val dummyViewModel = GoldPriceViewModel(dummyRepository)
-
-        // Manually set some dummy data for the preview to show the chart and current price
-        LaunchedEffect(Unit) {
-            dummyViewModel._isLoading.value = false
-            dummyViewModel._errorMessage.value = null
-            val now = System.currentTimeMillis()
-            val dummyPrices = (0 until 10).map { i ->
-                PricePoint(
-                    timestamp = now - (10 - i) * 3600 * 1000L, // 1 hour intervals
-                    price = 2000f + (i * 5f) + (Math.random() - 0.5).toFloat() * 10f
-                )
-            }
-            dummyViewModel._historicalPrices.value = dummyPrices
-            dummyViewModel._currentPrice.value = dummyPrices.lastOrNull()?.price
         }
-        GoldPriceTrackerScreen(viewModel = dummyViewModel)
+        val mockViewModel = GoldPriceViewModel(mockRepository)
+        // Manually trigger data fetch for preview if needed, or set initial state
+        // For a simple preview, we can just show the UI structure
+        GoldPriceTrackerScreen(viewModel = mockViewModel)
     }
 }

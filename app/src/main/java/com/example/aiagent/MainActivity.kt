@@ -22,22 +22,32 @@ import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
+import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.highlight.Highlight
 import com.github.mikephil.charting.listener.OnChartValueSelectedListener
+import com.example.aiagent.ui.theme.AIAgentTheme // Assuming a theme file exists in ui.theme package
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import retrofit2.Retrofit
-import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
-// 1. Data Models
-// Data class to represent a single K-line (candlestick) data point from Binance API
+// Data Models
+// Binance Klines API response structure:
+// Example: [[1499040000000,"0.01634790","0.80000000","0.01575600","0.01577100","148.87948700","1499644799999","2431.90654791","308","175.60000000","2.74747145","1780.00000000"]]
+// We are interested in:
+// 0: Open time (Long)
+// 4: Close price (String)
+// The API returns a List<List<Any>> where Any can be String or Long.
+// We will fetch it as List<List<String>> and then manually parse the types.
 @Serializable
 data class KlineData(
     val openTime: Long,
@@ -52,315 +62,343 @@ data class KlineData(
     val takerBuyBaseAssetVolume: String,
     val takerBuyQuoteAssetVolume: String,
     val ignore: String
-) {
-    // Companion object to provide a factory method for converting the raw List<String> from Binance API
-    companion object {
-        fun fromList(list: List<String>): KlineData {
-            return KlineData(
-                openTime = list[0].toLong(),
-                openPrice = list[1],
-                highPrice = list[2],
-                lowPrice = list[3],
-                closePrice = list[4],
-                volume = list[5],
-                closeTime = list[6].toLong(),
-                quoteAssetVolume = list[7],
-                numberOfTrades = list[8].toLong(),
-                takerBuyBaseAssetVolume = list[9],
-                takerBuyQuoteAssetVolume = list[10],
-                ignore = list[11]
-            )
-        }
-    }
-}
+)
 
-// 2. API Interface for Binance
+// Retrofit Interface
 interface BinanceApiService {
     @GET("api/v3/klines")
     suspend fun getKlines(
         @Query("symbol") symbol: String,
         @Query("interval") interval: String,
-        @Query("limit") limit: Int = 500 // Default to fetch 500 data points
-    ): List<List<String>> // Binance Klines API returns a list of lists of strings
+        @Query("limit") limit: Int
+    ): List<List<String>> // Binance Klines API returns a list of lists of strings/numbers
 }
 
-// 3. Retrofit Client Setup
+// Retrofit Client
 object RetrofitClient {
     private const val BASE_URL = "https://api.binance.com/"
 
-    // Configure Kotlinx Serialization for JSON parsing
     private val json = Json {
-        ignoreUnknownKeys = true // Ignore fields not defined in our data classes
-        isLenient = true // Be lenient with JSON parsing
+        ignoreUnknownKeys = true
+        isLenient = true // Allow unquoted strings, etc.
     }
 
-    // Lazy initialization of BinanceApiService using Retrofit
-    val binanceApiService: BinanceApiService by lazy {
+    private val retrofit: Retrofit by lazy {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
-            // Add Kotlinx Serialization converter factory
+            // Use kotlinx.serialization converter
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-            .create(BinanceApiService::class.java)
+    }
+
+    val api: BinanceApiService by lazy {
+        retrofit.create(BinanceApiService::class.java)
     }
 }
 
-// 4. ViewModel
-// Sealed class to represent the different states of the gold price data
-sealed class GoldPriceState {
-    object Loading : GoldPriceState()
-    data class Success(val currentPrice: String, val klineData: List<KlineData>) : GoldPriceState()
-    data class Error(val message: String) : GoldPriceState()
-}
+// ViewModel
+class MainViewModel(private val binanceApiService: BinanceApiService) : ViewModel() {
 
-// ViewModel responsible for fetching and managing gold price data
-class GoldPriceViewModel(private val apiService: BinanceApiService) : ViewModel() {
-    // Mutable state to hold the current UI state, exposed as an immutable State
-    private val _goldPriceState = mutableStateOf<GoldPriceState>(GoldPriceState.Loading)
-    val goldPriceState: State<GoldPriceState> = _goldPriceState
+    private val _currentPrice = MutableStateFlow<String>("N/A")
+    val currentPrice: StateFlow<String> = _currentPrice
+
+    private val _klineData = MutableStateFlow<List<KlineData>>(emptyList())
+    val klineData: StateFlow<List<KlineData>> = _klineData
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage
 
     init {
-        // Fetch data when the ViewModel is initialized
-        fetchGoldPriceData()
+        fetchPriceData()
     }
 
-    // Function to fetch gold price data from the Binance API
-    fun fetchGoldPriceData() {
-        _goldPriceState.value = GoldPriceState.Loading // Set state to loading
-        viewModelScope.launch { // Launch a coroutine in the ViewModel's scope
+    fun fetchPriceData() {
+        _isLoading.value = true
+        _errorMessage.value = null
+        viewModelScope.launch {
             try {
-                // Fetch raw klines data for PAXGUSDT with 1-hour interval
-                val rawKlines = apiService.getKlines(symbol = "PAXGUSDT", interval = "1h")
-                // Convert raw list of lists to our structured KlineData objects
-                val klineData = rawKlines.map { KlineData.fromList(it) }
-                // Get the latest closing price
-                val currentPrice = klineData.lastOrNull()?.closePrice ?: "N/A"
-                // Update state to success with the fetched data
-                _goldPriceState.value = GoldPriceState.Success(currentPrice, klineData)
-            } catch (e: Exception) {
-                // Update state to error if an exception occurs
-                _goldPriceState.value = GoldPriceState.Error("Failed to fetch data: ${e.message}")
-                e.printStackTrace()
-            }
-        }
-    }
+                val response = binanceApiService.getKlines(
+                    symbol = "PAXGUSDT",
+                    interval = "1h", // 1-hour interval
+                    limit = 100 // Get last 100 data points
+                )
 
-    // Companion object to provide a ViewModelProvider.Factory for injecting dependencies
-    companion object {
-        val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                if (modelClass.isAssignableFrom(GoldPriceViewModel::class.java)) {
-                    // Create an instance of GoldPriceViewModel, injecting the BinanceApiService
-                    return GoldPriceViewModel(RetrofitClient.binanceApiService) as T
+                // Manually parse the List<List<String>> into KlineData
+                val parsedData = response.mapNotNull { kline ->
+                    if (kline.size >= 12) { // Ensure enough elements
+                        try {
+                            KlineData(
+                                openTime = kline[0].toLong(),
+                                openPrice = kline[1],
+                                highPrice = kline[2],
+                                lowPrice = kline[3],
+                                closePrice = kline[4],
+                                volume = kline[5],
+                                closeTime = kline[6].toLong(),
+                                quoteAssetVolume = kline[7],
+                                numberOfTrades = kline[8].toLong(),
+                                takerBuyBaseAssetVolume = kline[9],
+                                takerBuyQuoteAssetVolume = kline[10],
+                                ignore = kline[11]
+                            )
+                        } catch (e: Exception) {
+                            // Log error or handle malformed kline entry
+                            // println("Error parsing kline entry: $kline, Error: $e")
+                            null
+                        }
+                    } else {
+                        null
+                    }
                 }
-                throw IllegalArgumentException("Unknown ViewModel class")
+
+                _klineData.value = parsedData
+                _currentPrice.value = parsedData.lastOrNull()?.closePrice ?: "N/A"
+
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to fetch data: ${e.localizedMessage}"
+                _currentPrice.value = "Error"
+                _klineData.value = emptyList()
+            } finally {
+                _isLoading.value = false
             }
         }
     }
 }
 
-// 5. Compose UI
+// ViewModel Factory
+class MainViewModelFactory(private val binanceApiService: BinanceApiService) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return MainViewModel(binanceApiService) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+
+// MainActivity
 class MainActivity : ComponentActivity() {
-    // Opt-in for experimental Material 3 APIs
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme { // Apply Material Design theme
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    GoldPriceTrackerApp() // Main Composable for the app
-                }
+            AIAgentTheme {
+                val viewModel: MainViewModel = viewModel(
+                    factory = MainViewModelFactory(RetrofitClient.api)
+                )
+                MainScreen(viewModel = viewModel)
             }
         }
     }
 }
 
-// Main Composable function for the Gold Price Tracker application
+// Composable Functions
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GoldPriceTrackerApp(
-    // Obtain GoldPriceViewModel using the custom factory
-    goldPriceViewModel: GoldPriceViewModel = viewModel(factory = GoldPriceViewModel.Factory)
-) {
+fun MainScreen(viewModel: MainViewModel) {
+    val currentPrice by viewModel.currentPrice.collectAsState()
+    val klineData by viewModel.klineData.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("PAXGUSDT 金價追蹤") }) // Top app bar
+            TopAppBar(title = { Text("PAXGUSDT 金價追蹤") })
         }
     ) { paddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues) // Apply padding from Scaffold
-                .padding(16.dp), // Additional padding
+                .padding(paddingValues)
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
-            val state = goldPriceViewModel.goldPriceState.value // Observe the ViewModel state
+            Text(
+                text = "當前 PAXGUSDT 價格:",
+                style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Text(
+                text = "$currentPrice USDT",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
 
-            when (state) {
-                is GoldPriceState.Loading -> {
-                    CircularProgressIndicator() // Show loading indicator
-                    Text("載入中...")
-                }
-                is GoldPriceState.Success -> {
-                    Text(
-                        text = "當前 PAXGUSDT 價格: ${state.currentPrice}",
-                        style = MaterialTheme.typography.headlineMedium,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                    LineChartCompose(klineData = state.klineData) // Display the chart
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { goldPriceViewModel.fetchGoldPriceData() }) {
-                        Text("重新整理") // Refresh button
-                    }
-                }
-                is GoldPriceState.Error -> {
-                    Text(
-                        text = "錯誤: ${state.message}",
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                    Button(onClick = { goldPriceViewModel.fetchGoldPriceData() }) {
-                        Text("重試") // Retry button
-                    }
-                }
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.padding(16.dp))
             }
+
+            errorMessage?.let { message ->
+                Text(
+                    text = message,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+
+            Button(
+                onClick = { viewModel.fetchPriceData() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                enabled = !isLoading
+            ) {
+                Text("重新整理")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "PAXGUSDT 歷史價格 (1小時K線)",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            PriceChart(
+                klineData = klineData,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(300.dp)
+            )
         }
     }
 }
 
-// Composable function to display the MPAndroidChart LineChart
 @Composable
-fun LineChartCompose(klineData: List<KlineData>) {
-    val context = LocalContext.current // Get the current Android context
-    // Convert KlineData to MPAndroidChart Entry objects
-    val entries = remember(klineData) {
-        klineData.mapIndexed { index, data ->
-            Entry(index.toFloat(), data.closePrice.toFloat())
-        }
-    }
+fun PriceChart(klineData: List<KlineData>, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val chart = remember { LineChart(context) }
 
-    // Generate X-axis labels from close times
-    val xAxisLabels = remember(klineData) {
-        klineData.map {
-            SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.closeTime))
-        }
-    }
-
-    // Use AndroidView to embed the traditional Android View (LineChart) into Compose
     AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp),
-        factory = { ctx ->
-            LineChart(ctx).apply {
-                description.isEnabled = false // Disable chart description
-                setTouchEnabled(true) // Enable touch interactions
-                isDragEnabled = true // Enable dragging
-                setScaleEnabled(true) // Enable scaling
-                setPinchZoom(true) // Enable pinch zoom
+        modifier = modifier,
+        factory = {
+            chart.apply {
+                description.isEnabled = false
+                setTouchEnabled(true)
+                isDragEnabled = true
+                setScaleEnabled(true)
+                setPinchZoom(true)
+                setDrawGridBackground(false)
+                setBackgroundColor(Color.WHITE)
 
-                // Customize X-axis
+                // X-axis configuration
                 xAxis.apply {
-                    position = XAxis.XAxisPosition.BOTTOM // Position X-axis at the bottom
-                    setDrawGridLines(false) // Disable X-axis grid lines (MPAndroidChart 3.1.0 syntax)
-                    setDrawAxisLine(true) // Draw X-axis line
+                    position = XAxis.XAxisPosition.BOTTOM
+                    setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
+                    setDrawAxisLine(true)
                     textColor = Color.BLACK
-                    valueFormatter = IndexAxisValueFormatter(xAxisLabels) // Set custom labels
-                    granularity = 1f // Only show integer values on the X-axis
+                    valueFormatter = object : ValueFormatter() {
+                        private val mFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+                        override fun getFormattedValue(value: Float): String {
+                            // value is the index of the entry, map it back to timestamp
+                            val index = value.roundToInt()
+                            return if (index >= 0 && index < klineData.size) {
+                                mFormat.format(Date(klineData[index].openTime))
+                            } else {
+                                ""
+                            }
+                        }
+                    }
                     labelRotationAngle = -45f // Rotate labels for better readability
-                    setLabelCount(4, true) // Show approximately 4 labels, force true for exact count
+                    setLabelCount(4, true) // Show approximately 4 labels, force interval
                 }
 
-                // Customize Y-axis (left)
+                // Left Y-axis configuration
                 axisLeft.apply {
-                    setDrawGridLines(true) // Enable Y-axis grid lines
-                    setDrawAxisLine(true) // Draw Y-axis line
+                    setDrawGridLines(true)
                     textColor = Color.BLACK
+                    axisMinimum = 0f // Start from 0 or adjust based on data
                 }
 
-                // Customize Y-axis (right)
-                axisRight.isEnabled = false // Disable the right Y-axis
+                // Right Y-axis configuration (disable)
+                axisRight.isEnabled = false
 
-                // Customize Legend
+                // Legend configuration
                 legend.apply {
-                    isEnabled = true // Enable legend
+                    isEnabled = true
                     textColor = Color.BLACK
                 }
 
-                // Add a listener for value selection (optional)
+                // Marker for selected values
                 setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
                     override fun onValueSelected(e: Entry?, h: Highlight?) {
-                        // Handle value selection if needed, e.g., show a tooltip
+                        e?.let {
+                            val index = it.x.roundToInt()
+                            if (index >= 0 && index < klineData.size) {
+                                val kline = klineData[index]
+                                val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(kline.openTime))
+                                val price = kline.closePrice
+                                chart.centerViewToAnimated(it.x, it.y, chart.yAxis.axisDependency, 500)
+                                // You might want to show a custom marker view here
+                                // For simplicity, we'll just log or update a state
+                                // Log.d("Chart", "Selected: Date=$date, Price=$price")
+                            }
+                        }
                     }
 
                     override fun onNothingSelected() {
-                        // Handle nothing selected if needed
+                        // Do nothing
                     }
                 })
             }
         },
-        update = { chart ->
-            // Update the chart data when klineData changes
-            if (entries.isNotEmpty()) {
-                val dataSet = LineDataSet(entries, "PAXGUSDT Close Price").apply {
-                    color = Color.BLUE
-                    setCircleColor(Color.BLUE)
-                    lineWidth = 2f
-                    circleRadius = 3f
-                    setDrawCircleHole(false)
-                    valueTextSize = 0f // Hide value text on points
-                    setDrawFilled(true) // Fill area below the line
-                    fillColor = Color.BLUE
-                    fillAlpha = 50 // Set fill transparency
-                }
-
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-                chart.xAxis.valueFormatter = IndexAxisValueFormatter(xAxisLabels) // Update formatter
-                chart.invalidate() // Refresh chart to redraw with new data
-            } else {
-                chart.clear() // Clear chart if no data
-                chart.setNoDataText("沒有數據可顯示") // Display no data text
-                chart.invalidate()
-            }
+        update = { lineChart ->
+            updateChart(lineChart, klineData)
         }
     )
 }
 
-// Preview Composable for GoldPriceTrackerApp
-@OptIn(ExperimentalMaterial3Api::class)
+private fun updateChart(chart: LineChart, klineData: List<KlineData>) {
+    if (klineData.isEmpty()) {
+        chart.data = null
+        chart.invalidate()
+        return
+    }
+
+    val entries = klineData.mapIndexed { index, data ->
+        Entry(index.toFloat(), data.closePrice.toFloat())
+    }
+
+    val dataSet = LineDataSet(entries, "PAXGUSDT Close Price").apply {
+        color = Color.BLUE
+        setCircleColor(Color.BLUE)
+        lineWidth = 2f
+        circleRadius = 3f
+        setDrawCircleHole(false)
+        valueTextSize = 9f
+        setDrawValues(false) // Hide individual value labels on the chart
+        mode = LineDataSet.Mode.LINEAR // Smooth line
+    }
+
+    val lineData = LineData(dataSet)
+    chart.data = lineData
+    chart.invalidate() // Refresh the chart
+    chart.animateX(1000) // Animate chart on X-axis
+}
+
 @Preview(showBackground = true)
 @Composable
-fun GoldPriceTrackerAppPreview() {
-    MaterialTheme {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Scaffold(
-                topBar = {
-                    TopAppBar(title = { Text("PAXGUSDT 金價追蹤 (預覽)") })
-                }
-            ) { paddingValues ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("預覽模式", style = MaterialTheme.typography.headlineMedium)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    CircularProgressIndicator()
-                    Text("載入中...")
-                }
-            }
+fun DefaultPreview() {
+    AIAgentTheme {
+        // Create a dummy ViewModel for preview
+        val dummyKlines = listOf(
+            KlineData(1678886400000, "1800", "1810", "1790", "1805", "", 0, "", 0, "", "", ""),
+            KlineData(1678890000000, "1805", "1815", "1800", "1812", "", 0, "", 0, "", "", ""),
+            KlineData(1678893600000, "1812", "1820", "1808", "1818", "", 0, "", 0, "", "", ""),
+            KlineData(1678897200000, "1818", "1825", "1815", "1822", "", 0, "", 0, "", "", ""),
+            KlineData(1678900800000, "1822", "1830", "1819", "1828", "", 0, "", 0, "", "", "")
+        )
+        val dummyViewModel = object : MainViewModel(RetrofitClient.api) {
+            override val currentPrice: StateFlow<String> = MutableStateFlow("1828.50")
+            override val klineData: StateFlow<List<KlineData>> = MutableStateFlow(dummyKlines)
+            override val isLoading: StateFlow<Boolean> = MutableStateFlow(false)
+            override val errorMessage: StateFlow<String?> = MutableStateFlow(null)
+            override fun fetchPriceData() { /* Do nothing for preview */ }
         }
+        MainScreen(viewModel = dummyViewModel)
     }
 }

@@ -3,161 +3,191 @@ package com.example.aiagent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.aiagent.ui.theme.AiAgentTheme // Assuming your project creates this theme
-import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
-import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
-import com.patrykandpatrick.vico.compose.chart.CartesianChartHost
-import com.patrykandpatrick.vico.compose.chart.layer.rememberLineCartesianLayer
-import com.patrykandpatrick.vico.compose.chart.rememberCartesianChart
-import com.patrykandpatrick.vico.compose.chart.scroll.rememberVicoScrollState
-import com.patrykandpatrick.vico.compose.component.rememberLineComponent
-import com.patrykandpatrick.vico.compose.component.rememberTextComponent
-import com.patrykandpatrick.vico.compose.dimensions.Dimensions
-import com.patrykandpatrick.vico.core.axis.AxisPosition
-import com.patrykandpatrick.vico.core.axis.formatter.AxisValueFormatter
-import com.patrykandpatrick.vico.core.component.shape.Shapes
-import com.patrykandpatrick.vico.core.model.CartesianChartModelProducer
-import com.patrykandpatrick.vico.core.model.lineSeries
+import com.example.aiagent.ui.theme.AiAgentTheme
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.engine.android.Android
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
-/**
- * ViewModel for fetching and managing PAXG price data.
- */
+// Ktor and kotlinx.serialization imports for custom serializer
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+
+// Vico Chart Imports
+import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
+import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
+import com.patrykandpatrick.vico.compose.chart.CartesianChartHost
+import com.patrykandpatrick.vico.compose.chart.layer.rememberLineCartesianLayer
+import com.patrykandpatrick.vico.compose.chart.model.CartesianChartModelProducer
+import com.patrykandpatrick.vico.compose.chart.model.lineSeries
+import com.patrykandpatrick.vico.compose.chart.model.rememberCartesianChartModelProducer
+import com.patrykandpatrick.vico.compose.chart.rememberCartesianChart
+import com.patrykandpatrick.vico.compose.component.rememberLineComponent
+import com.patrykandpatrick.vico.compose.component.rememberTextComponent
+import com.patrykandpatrick.vico.compose.component.shape.Shapes
+import com.patrykandpatrick.vico.compose.dimensions.Dimensions
+import com.patrykandpatrick.vico.compose.scroll.rememberVicoScrollState
+import com.patrykandpatrick.vico.core.axis.AxisPosition
+import com.patrykandpatrick.vico.core.formatter.AxisValueFormatter
+import com.patrykandpatrick.vico.core.entry.entryOf // Used for creating chart entries
+
+// Data classes for Binance API response
+// The Binance Klines API returns a list of lists, where each inner list contains various types.
+// A custom serializer for `Any` is needed because Ktor's default JSON serializer doesn't
+// handle `List<List<Any>>` directly without type information.
+// This serializer attempts to convert string values to Long/Double if possible, otherwise keeps them as String.
+object AnyAsStringSerializer : kotlinx.serialization.KSerializer<Any> {
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("AnyAsString", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): Any {
+        val stringValue = decoder.decodeString()
+        return stringValue.toLongOrNull() ?: stringValue.toDoubleOrNull() ?: stringValue
+    }
+
+    override fun serialize(encoder: Encoder, value: Any) {
+        encoder.encodeString(value.toString())
+    }
+}
+
+// Data class to match Binance Klines API response structure
+// The `@Serializable(with = AnyAsStringSerializer::class)` annotation tells Ktor how to handle `Any` type.
+@Serializable
+data class BinanceKlinesResponse(
+    val data: List<List<@Serializable(with = AnyAsStringSerializer::class) Any>>
+)
+
+
 class PAXGViewModel : ViewModel() {
-    // Current PAXG price (last available close price)
-    private val _currentPrice = MutableStateFlow<Double?>(null)
-    val currentPrice: StateFlow<Double?> = _currentPrice.asStateFlow()
+    private val _paxgPrice = MutableStateFlow<String>("Loading...")
+    val paxgPrice: StateFlow<String> = _paxgPrice.asStateFlow()
 
-    // Chart data: list of (timestamp_millis, close_price) pairs
-    private val _chartData = MutableStateFlow<List<Pair<Long, Double>>>(emptyList())
-    val chartData: StateFlow<List<Pair<Long, Double>>> = _chartData.asStateFlow()
+    private val _chartData = MutableStateFlow<List<Pair<Long, Float>>>(emptyList())
+    val chartData: StateFlow<List<Pair<Long, Float>>> = _chartData.asStateFlow()
 
-    // Ktor HTTP client for API requests
-    private val httpClient = HttpClient(Android) {
+    private val client = HttpClient(Android) {
         install(ContentNegotiation) {
             json(Json {
-                ignoreUnknownKeys = true // Ignore fields we don't need
-                isLenient = true // Allow relaxed JSON parsing
+                ignoreUnknownKeys = true
+                isLenient = true
             })
         }
     }
 
     init {
-        // Fetch data immediately when the ViewModel is created
-        fetchPriceData()
+        fetchPAXGPriceAndChartData()
     }
 
-    /**
-     * Fetches historical kline data for PAXGUSDT from Binance API.
-     * Fetches 24 one-hour klines to display price over the last 24 hours.
-     */
-    fun fetchPriceData() {
+    fun fetchPAXGPriceAndChartData() {
         viewModelScope.launch {
             try {
-                // Binance API endpoint for klines (candlestick data)
-                // symbol=PAXGUSDT, interval=1h (1 hour), limit=24 (last 24 data points)
-                val response: List<List<String>> =
-                    httpClient.get("https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24").body()
+                // Fetch current price
+                val currentPriceUrl = "https://api.binance.com/api/v3/ticker/price?symbol=PAXGUSDT"
+                val priceResponse = client.get(currentPriceUrl).bodyAsText()
+                val jsonResponse = Json.parseToJsonElement(priceResponse).jsonObject
+                val price = jsonResponse["price"]?.jsonPrimitive?.content ?: "N/A"
+                _paxgPrice.value = price
 
-                val klines = response.map { rawKline ->
-                    // Binance kline array structure:
-                    // [0] open time, [1] open price, [2] high price, [3] low price, [4] close price, ...
-                    rawKline[0].toLong() to rawKline[4].toDouble() // Map (timestamp, close_price)
+                // Fetch kline data for charting (e.g., last 24 hours, 1-hour interval)
+                val klinesUrl = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=1h&limit=24"
+                val klinesResponseRaw = client.get(klinesUrl).bodyAsText()
+
+                // Deserialize raw klines response using the custom serializer for 'Any'
+                val rawKlines: List<List<Any>> = Json.decodeFromString(klinesResponseRaw)
+
+                val parsedChartData = rawKlines.mapNotNull { kline ->
+                    if (kline.size >= 5) { // Ensure enough elements for timestamp and close price
+                        try {
+                            // The 0th element is open time (Long), 4th is close price (String)
+                            val timestamp = (kline[0] as? Long) ?: return@mapNotNull null
+                            val closePriceString = kline[4] as? String ?: return@mapNotNull null
+                            val closePrice = closePriceString.toFloat()
+                            Pair(timestamp, closePrice)
+                        } catch (e: Exception) {
+                            println("Error parsing kline data point: $kline, Error: ${e.message}")
+                            null
+                        }
+                    } else {
+                        null
+                    }
                 }
+                _chartData.value = parsedChartData
 
-                _chartData.value = klines
-                _currentPrice.value = klines.lastOrNull()?.second // The last close price is the current price
             } catch (e: Exception) {
-                // Handle errors: log, show error message, or clear data
-                _currentPrice.value = null // Indicate error or loading failure
-                _chartData.value = emptyList() // Clear chart data on error
-                e.printStackTrace()
-                // In a real app, you might show a Toast or Snackbar here
+                _paxgPrice.value = "Error: ${e.localizedMessage}"
+                _chartData.value = emptyList() // Clear chart on error
+                println("Error fetching PAXG data: ${e.message}")
             }
         }
     }
 
     override fun onCleared() {
         super.onCleared()
-        httpClient.close() // Close the Ktor client to release resources
+        client.close()
     }
 }
 
-/**
- * Main composable screen for tracking PAXG price.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PAXGTrackerScreen(viewModel: PAXGViewModel = viewModel()) {
-    val currentPrice by viewModel.currentPrice.collectAsState()
-    val chartData by viewModel.chartData.collectAsState()
-
-    // Vico chart model producer to efficiently update chart data
-    val modelProducer = remember { CartesianChartModelProducer.build() }
-
-    // Update the chart model whenever chartData changes
-    LaunchedEffect(chartData) {
-        if (chartData.isNotEmpty()) {
-            modelProducer.tryRunTransaction {
-                // Create a line series from the list of close prices
-                lineSeries {
-                    series(chartData.map { it.second })
-                }
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { // This provides the @Composable context
+            AiAgentTheme {
+                PAXGPriceTrackerApp()
             }
         }
     }
+}
 
-    // Auto-refresh data every 5 minutes (300,000 milliseconds)
-    LaunchedEffect(Unit) {
-        while (true) {
-            viewModel.fetchPriceData()
-            delay(TimeUnit.MINUTES.toMillis(5))
-        }
-    }
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun PAXGPriceTrackerApp(viewModel: PAXGViewModel = viewModel()) {
+    val paxgPrice by viewModel.paxgPrice.collectAsState()
+    val chartData by viewModel.chartData.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("PAXG Gold Tracker") })
+            TopAppBar(
+                title = { Text(stringResource(R.string.app_name)) }
+            )
         }
     ) { paddingValues ->
         Column(
@@ -165,147 +195,127 @@ fun PAXGTrackerScreen(viewModel: PAXGViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(paddingValues)
                 .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "Current PAXG/USDT Price:",
+                text = "PAXG/USDT Price:",
                 style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(bottom = 8.dp)
+                fontWeight = FontWeight.Bold
             )
-
-            if (currentPrice != null) {
-                Text(
-                    text = "$${String.format("%.2f", currentPrice)}",
-                    style = MaterialTheme.typography.displayMedium.copy(
-                        color = MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-            } else {
-                Text(
-                    text = "Loading price...",
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth(0.6f)
-                        .height(4.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
             Text(
-                text = "Last 24 Hours Price Chart",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(bottom = 16.dp)
+                text = "$$paxgPrice",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.primary
             )
 
-            if (chartData.isNotEmpty()) {
-                // Custom formatter for the X-axis (time)
-                val timeAxisValueFormatter = remember {
-                    AxisValueFormatter<AxisPosition.Horizontal.Bottom> { value, _ ->
-                        // 'value' here is the index of the chart entry (0 to 23 for 24 data points)
-                        val timestampMillis = chartData.getOrNull(value.toInt())?.first ?: 0L
-                        val instant = Instant.ofEpochMilli(timestampMillis)
-                        // Format to "HH:mm" (e.g., "14:00")
-                        val formatter = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
-                        formatter.format(instant)
-                    }
-                }
-
-                // Custom formatter for the Y-axis (price)
-                val priceAxisValueFormatter = remember {
-                    AxisValueFormatter<AxisPosition.Vertical.Start> { value, _ ->
-                        "$%.0f".format(value) // Format price as "$X" (e.g., "$2300")
-                    }
-                }
-
-                CartesianChartHost(
-                    chart = rememberCartesianChart(
-                        rememberLineCartesianLayer(
-                            lines = listOf(
-                                rememberLineComponent(
-                                    color = MaterialTheme.colorScheme.primary,
-                                    thickness = 2.dp.value,
-                                    shape = Shapes.pillShape, // Smooth line style
-                                    point = rememberLineComponent( // Optional: points on the line
-                                        color = MaterialTheme.colorScheme.secondary,
-                                        shape = Shapes.pillShape,
-                                        thickness = 6.dp.value,
-                                        dynamicShader = null
-                                    )
-                                )
-                            )
-                        ),
-                        // Configure the Y-axis (startAxis)
-                        startAxis = rememberStartAxis(
-                            valueFormatter = priceAxisValueFormatter,
-                            label = rememberTextComponent(
-                                color = MaterialTheme.colorScheme.onSurface,
-                                textSize = 10.sp,
-                                background = rememberLineComponent(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    thickness = 1.dp.value,
-                                    shape = Shapes.roundedCornerShape(2.dp),
-                                    strokeColor = MaterialTheme.colorScheme.outlineVariant,
-                                    strokeWidth = 1.dp.value
-                                ),
-                                padding = Dimensions.current.axisLabelVerticalPadding,
-                            ),
-                        ),
-                        // Configure the X-axis (bottomAxis)
-                        bottomAxis = rememberBottomAxis(
-                            valueFormatter = timeAxisValueFormatter,
-                            label = rememberTextComponent(
-                                color = MaterialTheme.colorScheme.onSurface,
-                                textSize = 10.sp,
-                                background = rememberLineComponent(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    thickness = 1.dp.value,
-                                    shape = Shapes.roundedCornerShape(2.dp),
-                                    strokeColor = MaterialTheme.colorScheme.outlineVariant,
-                                    strokeWidth = 1.dp.value
-                                ),
-                                padding = Dimensions.current.axisLabelVerticalPadding,
-                            ),
-                        ),
-                    ),
-                    modelProducer = modelProducer,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(300.dp),
-                    scrollState = rememberVicoScrollState(scrollEnabled = true) // Enable horizontal scrolling for dense charts
-                )
+            if (paxgPrice == "Loading...") {
+                CircularProgressIndicator()
+            } else if (chartData.isNotEmpty()) {
+                PAXGPriceChart(chartData)
             } else {
-                // Show a loading indicator if chart data is not yet available
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth(0.8f)
-                        .padding(top = 16.dp)
-                )
-                Text("Fetching chart data...", modifier = Modifier.padding(top = 8.dp))
+                Text("No chart data available or error occurred.", color = Color.Red)
             }
         }
     }
 }
 
-/**
- * Main Activity for the Android application.
- */
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            AiAgentTheme { // Apply your application's theme
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    PAXGTrackerScreen() // Display the gold tracker screen
-                }
+@Composable
+fun PAXGPriceChart(chartData: List<Pair<Long, Float>>) {
+    // Convert List<Pair<Long, Float>> to Vico's entry model
+    val modelProducer = rememberCartesianChartModelProducer()
+    LaunchedEffect(chartData) {
+        modelProducer.tryRunTransaction {
+            val entries = chartData.mapIndexed { index, pair ->
+                // Vico's x-axis is float. We use index for position and a formatter for actual time labels.
+                entryOf(index.toFloat(), pair.second)
             }
+            lineSeries { series(entries) }
         }
+    }
+
+    // X-axis formatter for timestamps (assuming chartData.first is timestamp)
+    val xAxisValueFormatter = AxisValueFormatter<AxisPosition.Horizontal.Bottom> { value, _ ->
+        val timestamp = chartData.getOrNull(value.toInt())?.first ?: return@AxisValueFormatter ""
+        val date = Date(timestamp)
+        // Use UTC for Binance kline open times
+        val formatter = SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        formatter.format(date)
+    }
+
+    // Y-axis formatter for price
+    val yAxisValueFormatter = AxisValueFormatter<AxisPosition.Vertical.Start> { value, _ ->
+        "%.2f".format(value)
+    }
+
+    CartesianChartHost(
+        chart = rememberCartesianChart(
+            rememberLineCartesianLayer(
+                lines = listOf(
+                    rememberLineComponent(
+                        color = MaterialTheme.colorScheme.primary,
+                        thickness = 2.dp,
+                        shape = Shapes.pillShape // Example shape for the line itself
+                    )
+                )
+            ),
+            startAxis = rememberStartAxis(
+                label = rememberTextComponent(
+                    color = MaterialTheme.colorScheme.onBackground,
+                    background = null, // No background for labels
+                    lineCount = 1,
+                    padding = Dimensions.current.axisLabelVerticalPadding,
+                    margins = Dimensions.current.axisLabelMargins
+                ),
+                axis = rememberLineComponent(
+                    color = MaterialTheme.colorScheme.outline,
+                    thickness = 1.dp
+                ),
+                tick = rememberLineComponent(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    thickness = 1.dp
+                ),
+                valueFormatter = yAxisValueFormatter,
+                guideline = rememberLineComponent(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    thickness = 0.5.dp
+                )
+            ),
+            bottomAxis = rememberBottomAxis(
+                label = rememberTextComponent(
+                    color = MaterialTheme.colorScheme.onBackground,
+                    background = null, // No background for labels
+                    lineCount = 1,
+                    padding = Dimensions.current.axisLabelVerticalPadding,
+                    margins = Dimensions.current.axisLabelMargins
+                ),
+                axis = rememberLineComponent(
+                    color = MaterialTheme.colorScheme.outline,
+                    thickness = 1.dp
+                ),
+                tick = rememberLineComponent(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    thickness = 1.dp
+                ),
+                valueFormatter = xAxisValueFormatter,
+                guideline = rememberLineComponent(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    thickness = 0.5.dp
+                )
+            )
+        ),
+        modelProducer = modelProducer,
+        scrollState = rememberVicoScrollState(), // Allows horizontal scrolling for the chart
+        modifier = Modifier.fillMaxSize()
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+fun DefaultPreview() {
+    AiAgentTheme {
+        PAXGPriceTrackerApp()
     }
 }

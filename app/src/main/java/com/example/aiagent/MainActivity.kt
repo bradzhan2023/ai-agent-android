@@ -1,6 +1,7 @@
 package com.example.aiagent
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -8,14 +9,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.aiagent.ui.theme.AiAgentTheme
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.components.Legend
 import com.github.mikephil.charting.components.XAxis
@@ -23,55 +23,71 @@ import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
-import retrofit2.Response
+import android.graphics.Color // For MPAndroidChart colors
 
-// Minimal Theme definition for this single file output
-private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF6200EE),
-    secondary = Color(0xFF03DAC5),
-    tertiary = Color(0xFF3700B3)
+// Data model for Binance KLine
+// Binance KLines API returns a list of lists, where each inner list represents a KLine.
+// The types within the inner list are mixed (Double for timestamps, String for prices).
+// We define a data class to hold the parsed values.
+data class KLine(
+    val openTime: Long,
+    val openPrice: String,
+    val highPrice: String,
+    val lowPrice: String,
+    val closePrice: String,
+    val volume: String,
+    val closeTime: Long,
+    val quoteAssetVolume: String,
+    val numberOfTrades: Long,
+    val takerBuyBaseAssetVolume: String,
+    val takerBuyQuoteAssetVolume: String,
+    val ignore: String
 )
 
-@Composable
-fun AiAgentTheme(
-    content: @Composable () -> Unit
-) {
-    MaterialTheme(
-        colorScheme = LightColorScheme,
-        typography = MaterialTheme.typography,
-        content = content
+// Helper function to parse the raw list of Any from Binance API into a KLine object.
+// This is necessary because Gson struggles with direct deserialization of mixed types in a list.
+fun parseKLine(rawList: List<Any>): KLine {
+    return KLine(
+        openTime = (rawList[0] as Double).toLong(),
+        openPrice = rawList[1] as String,
+        highPrice = rawList[2] as String,
+        lowPrice = rawList[3] as String,
+        closePrice = rawList[4] as String,
+        volume = rawList[5] as String,
+        closeTime = (rawList[6] as Double).toLong(),
+        quoteAssetVolume = rawList[7] as String,
+        numberOfTrades = (rawList[8] as Double).toLong(),
+        takerBuyBaseAssetVolume = rawList[9] as String,
+        takerBuyQuoteAssetVolume = rawList[10] as String,
+        ignore = rawList[11] as String
     )
 }
 
-/**
- * Retrofit Interface for Binance API.
- * Fetches Klines (candlestick data) for a given symbol and interval.
- */
+// Retrofit API Service Interface for Binance
 interface BinanceApiService {
     @GET("api/v3/klines")
     fun getKlines(
         @Query("symbol") symbol: String,
         @Query("interval") interval: String,
-        @Query("limit") limit: Int = 500 // Default limit
-    ): Call<List<List<Any>>> // Binance API returns a list of lists, where inner lists contain mixed types
+        @Query("limit") limit: Int = 500 // Default limit for number of klines
+    ): Call<List<List<Any>>> // The API returns a list of lists of various types
 }
 
-/**
- * Singleton object for Retrofit client setup.
- */
+// Retrofit Client for API calls
 object RetrofitClient {
     private const val BASE_URL = "https://api.binance.com/"
 
-    val binanceApiService: BinanceApiService by lazy {
+    val apiService: BinanceApiService by lazy {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
             .addConverterFactory(GsonConverterFactory.create())
@@ -80,15 +96,13 @@ object RetrofitClient {
     }
 }
 
-/**
- * ViewModel to fetch and manage gold price data.
- */
+// ViewModel for fetching and managing gold price data
 class GoldPriceViewModel : ViewModel() {
-    private val _currentPrice = MutableStateFlow<Double?>(null)
-    val currentPrice: StateFlow<Double?> = _currentPrice
+    private val _currentPrice = MutableStateFlow<String>("Loading...")
+    val currentPrice: StateFlow<String> = _currentPrice
 
-    private val _priceHistory = MutableStateFlow<List<Entry>>(emptyList())
-    val priceHistory: StateFlow<List<Entry>> = _priceHistory
+    private val _chartEntries = MutableStateFlow<List<Entry>>(emptyList())
+    val chartEntries: StateFlow<List<Entry>> = _chartEntries
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -100,50 +114,43 @@ class GoldPriceViewModel : ViewModel() {
         fetchGoldPriceHistory()
     }
 
-    /**
-     * Fetches PAXGUSDT klines data from Binance API.
-     */
     fun fetchGoldPriceHistory() {
-        _isLoading.value = true
-        _errorMessage.value = null
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val response: Response<List<List<Any>>> = RetrofitClient.binanceApiService.getKlines(
-                    symbol = "PAXGUSDT",
-                    interval = "1h", // 1-hour interval
-                    limit = 100 // Get last 100 data points
-                ).execute()
-
-                if (response.isSuccessful) {
-                    val klines = response.body()
-                    if (klines != null && klines.isNotEmpty()) {
-                        val entries = mutableListOf<Entry>()
-                        klines.forEachIndexed { index, kline ->
-                            // kline[4] is the close price (String)
-                            // kline[0] is the open time (Long) - not used for X-axis in this simple chart
-                            val closePrice = (kline[4] as String).toFloat()
-                            entries.add(Entry(index.toFloat(), closePrice))
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
+            RetrofitClient.apiService.getKlines("PAXGUSDT", "1h", 100).enqueue(object : Callback<List<List<Any>>> {
+                override fun onResponse(call: Call<List<List<Any>>>, response: Response<List<List<Any>>>) {
+                    _isLoading.value = false
+                    if (response.isSuccessful) {
+                        val rawKlines = response.body()
+                        if (rawKlines != null && rawKlines.isNotEmpty()) {
+                            val klines = rawKlines.map { parseKLine(it) }
+                            // Convert KLine data to MPAndroidChart Entry objects
+                            val entries = klines.mapIndexed { index, kline ->
+                                Entry(index.toFloat(), kline.closePrice.toFloat())
+                            }
+                            _chartEntries.value = entries
+                            _currentPrice.value = klines.last().closePrice // Display the latest close price
+                        } else {
+                            _errorMessage.value = "No data received."
                         }
-                        _priceHistory.value = entries
-                        _currentPrice.value = (klines.last()[4] as String).toDouble()
                     } else {
-                        _errorMessage.value = "No data received from Binance API."
+                        _errorMessage.value = "Error: ${response.code()} - ${response.message()}"
+                        Log.e("GoldPriceViewModel", "API Error: ${response.code()} - ${response.message()}")
                     }
-                } else {
-                    _errorMessage.value = "Error fetching data: ${response.code()} - ${response.message()}"
                 }
-            } catch (e: Exception) {
-                _errorMessage.value = "Network error: ${e.localizedMessage ?: "Unknown error"}"
-            } finally {
-                _isLoading.value = false
-            }
+
+                override fun onFailure(call: Call<List<List<Any>>>, t: Throwable) {
+                    _isLoading.value = false
+                    _errorMessage.value = "Network error: ${t.message}"
+                    Log.e("GoldPriceViewModel", "Network error fetching klines", t)
+                }
+            })
         }
     }
 }
 
-/**
- * Main Activity for the Gold Price Tracker application.
- */
+// Main Activity for the Jetpack Compose app
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -153,21 +160,18 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    GoldPriceTrackerApp()
+                    GoldPriceTrackerScreen()
                 }
             }
         }
     }
 }
 
-/**
- * Main Composable for the Gold Price Tracker application.
- * Observes data from ViewModel and displays UI.
- */
+// Composable for the main gold price tracker screen
 @Composable
-fun GoldPriceTrackerApp(viewModel: GoldPriceViewModel = viewModel()) {
+fun GoldPriceTrackerScreen(viewModel: GoldPriceViewModel = viewModel()) {
     val currentPrice by viewModel.currentPrice.collectAsState()
-    val priceHistory by viewModel.priceHistory.collectAsState()
+    val chartEntries by viewModel.chartEntries.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
 
@@ -178,111 +182,113 @@ fun GoldPriceTrackerApp(viewModel: GoldPriceViewModel = viewModel()) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "PAXGUSDT 金價追蹤",
+            text = "PAXGUSDT Price Tracker",
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(bottom = 16.dp)
         )
 
         if (isLoading) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
-            Text("載入中...")
-        } else if (errorMessage != null) {
+        }
+
+        errorMessage?.let { message ->
             Text(
-                text = "錯誤: $errorMessage",
+                text = "Error: $message",
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(16.dp)
             )
-            Button(onClick = { viewModel.fetchGoldPriceHistory() }) {
-                Text("重試")
-            }
-        } else {
-            currentPrice?.let { price ->
-                Text(
-                    text = "目前價格: $%.2f".format(price),
-                    style = MaterialTheme.typography.headlineLarge,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            } ?: Text(
-                text = "目前價格: N/A",
-                style = MaterialTheme.typography.headlineLarge,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+        }
 
-            Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Current Price: $currentPrice USDT",
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
 
-            GoldPriceChart(priceHistory = priceHistory)
+        Button(
+            onClick = { viewModel.fetchGoldPriceHistory() },
+            enabled = !isLoading // Disable button while loading
+        ) {
+            Text("Refresh Price")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (chartEntries.isNotEmpty()) {
+            LineChartCompose(entries = chartEntries, modifier = Modifier.fillMaxWidth().height(300.dp))
+        } else if (!isLoading && errorMessage == null) {
+            Text("No chart data available.", modifier = Modifier.padding(16.dp))
         }
     }
 }
 
-/**
- * Composable to display the gold price history using MPAndroidChart LineChart.
- */
+// Composable wrapper for MPAndroidChart LineChart
 @Composable
-fun GoldPriceChart(priceHistory: List<Entry>) {
+fun LineChartCompose(entries: List<Entry>, modifier: Modifier = Modifier) {
+    // LocalContext is needed to create the LineChart view
     val context = LocalContext.current
-    // Use remember to keep the chart instance across recompositions
-    val chart = remember { LineChart(context) }
-
     AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp),
-        factory = {
-            // Configure the chart initially
-            chart.apply {
+        modifier = modifier,
+        factory = { ctx ->
+            LineChart(ctx).apply {
+                // Basic chart configuration
                 description.isEnabled = false // Disable chart description
-                setTouchEnabled(true)
-                isDragEnabled = true
-                setScaleEnabled(true)
-                setPinchZoom(true) // Enable pinch zoom for both axes
+                setTouchEnabled(true) // Enable touch gestures
+                isDragEnabled = true // Enable dragging
+                setScaleEnabled(true) // Enable scaling
+                setPinchZoom(true) // Enable pinch zoom
 
+                // Configure X-axis
                 xAxis.apply {
-                    position = XAxis.XAxisPosition.BOTTOM
-                    setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
-                    setDrawAxisLine(true)
-                    granularity = 1f // Only 1 unit on the x-axis
-                    valueFormatter = IndexAxisValueFormatter() // Simple index formatter for x-axis
+                    position = XAxis.XAxisPosition.BOTTOM // X-axis at the bottom
+                    setDrawGridLines(false) // Do not draw grid lines for X-axis
+                    setDrawAxisLine(true) // Draw axis line
+                    granularity = 1f // Only intervals of 1 on the axis
+                    valueFormatter = IndexAxisValueFormatter() // Simple index formatter for now
+                    textColor = Color.BLACK // Set text color for better visibility
                 }
 
+                // Configure Left Y-axis
                 axisLeft.apply {
-                    setDrawGridLines(true)
-                    setDrawAxisLine(true)
+                    setDrawGridLines(true) // Draw grid lines for Y-axis
+                    setDrawAxisLine(true) // Draw axis line
+                    textColor = Color.BLACK // Set text color for better visibility
                 }
 
-                axisRight.isEnabled = false // Disable right axis
+                // Disable Right Y-axis
+                axisRight.isEnabled = false
 
+                // Configure Legend
                 legend.apply {
-                    form = Legend.LegendForm.LINE
-                    verticalAlignment = Legend.LegendVerticalAlignment.BOTTOM
-                    horizontalAlignment = Legend.LegendHorizontalAlignment.LEFT
+                    isEnabled = true
+                    verticalAlignment = Legend.LegendVerticalAlignment.TOP
+                    horizontalAlignment = Legend.LegendHorizontalAlignment.RIGHT
                     orientation = Legend.LegendOrientation.HORIZONTAL
                     setDrawInside(false)
+                    form = Legend.LegendForm.CIRCLE
+                    textColor = Color.BLACK // Set text color for better visibility
                 }
             }
         },
-        update = { lineChart ->
-            // Update chart data when priceHistory changes
-            if (priceHistory.isNotEmpty()) {
-                val dataSet = LineDataSet(priceHistory, "PAXGUSDT Price").apply {
-                    color = Color.Blue.toArgb()
-                    setCircleColor(Color.Blue.toArgb())
-                    lineWidth = 2f
-                    circleRadius = 3f
-                    setDrawCircleHole(false)
-                    valueTextSize = 9f
-                    setDrawFilled(true)
-                    fillColor = Color.Blue.toArgb()
-                    fillAlpha = 50 // Transparency of the fill color
-                    mode = LineDataSet.Mode.LINEAR // Smooth line
+        update = { chart ->
+            if (entries.isNotEmpty()) {
+                val dataSet = LineDataSet(entries, "PAXGUSDT Close Price").apply {
+                    color = Color.BLUE // Line color
+                    setCircleColor(Color.RED) // Circle color for data points
+                    lineWidth = 2f // Line width
+                    circleRadius = 3f // Radius of the circles
+                    setDrawCircleHole(false) // Do not draw a hole in the circles
+                    valueTextSize = 9f // Size of the value text
+                    setDrawValues(false) // Hide value text on chart for a cleaner look
+                    setDrawFilled(false) // Disable fill under the line to avoid drawable dependency
                 }
 
                 val lineData = LineData(dataSet)
-                lineChart.data = lineData
-                lineChart.invalidate() // Refresh the chart view
+                chart.data = lineData
+                chart.invalidate() // Refresh chart to display new data
             } else {
-                lineChart.data = null // Clear data if history is empty
-                lineChart.invalidate()
+                chart.clear() // Clear chart if entries are empty
+                chart.invalidate()
             }
         }
     )

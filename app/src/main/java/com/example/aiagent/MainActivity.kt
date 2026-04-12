@@ -1,167 +1,198 @@
 package com.example.aiagent
 
-import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.material3.* // Using Material 3 components
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.github.mikephil.charting.charts.LineChart
-import com.github.mikephil.charting.components.AxisBase
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.ValueFormatter
-import kotlinx.coroutines.delay
+import com.github.mikephil.charting.highlight.Highlight
+import com.github.mikephil.charting.listener.OnChartValueSelectedListener
+import com.google.gson.GsonBuilder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 
-// Data Model
-data class PriceData(val timestamp: Long, val price: Double)
+// --- Data Models ---
+data class BinancePriceResponse(
+    val symbol: String,
+    val price: String
+)
 
-// Binance API Service
+// Binance klines API returns a list of lists.
+// We only care about Open time (index 0) and Close price (index 4) for a simple line chart.
+// The timestamp is in milliseconds.
+// The close price is a String, needs to be converted to Double.
+
+// --- Retrofit Interface ---
 interface BinanceApiService {
+    @GET("api/v3/ticker/price")
+    suspend fun getCurrentPrice(@Query("symbol") symbol: String): BinancePriceResponse
+
     @GET("api/v3/klines")
     suspend fun getKlines(
         @Query("symbol") symbol: String,
-        @Query("interval") interval: String,
-        @Query("limit") limit: Int
-    ): List<List<Any>> // Binance Klines return a list of lists
+        @Query("interval") interval: String, // e.g., "1h", "4h", "1d"
+        @Query("limit") limit: Int // Number of data points
+    ): List<List<Any>> // Raw response for klines
 }
 
-// Retrofit Client
+// --- Retrofit Client ---
 object RetrofitClient {
     private const val BASE_URL = "https://api.binance.com/"
 
-    val instance: BinanceApiService by lazy {
+    val apiService: BinanceApiService by lazy {
+        val gson = GsonBuilder()
+            .setLenient() // Be lenient with JSON parsing
+            .create()
+
         Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(BinanceApiService::class.java)
     }
 }
 
-// ViewModel
-class PAXGPriceViewModel(private val apiService: BinanceApiService) : ViewModel() {
+// --- ViewModel ---
+class MainViewModel(private val apiService: BinanceApiService) : ViewModel() {
 
-    private val _priceData = MutableStateFlow<List<PriceData>>(emptyList())
-    val priceData: StateFlow<List<PriceData>> = _priceData.asStateFlow()
+    private val _currentPrice = MutableStateFlow<String>("N/A")
+    val currentPrice: StateFlow<String> = _currentPrice
 
-    private val _currentPrice = MutableStateFlow<Double?>(null)
-    val currentPrice: StateFlow<Double?> = _currentPrice.asStateFlow()
+    private val _historicalData = MutableStateFlow<List<Entry>>(emptyList())
+    val historicalData: StateFlow<List<Entry>> = _historicalData
 
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
+    private val _selectedChartValue = MutableStateFlow<Pair<String, String>?>(null)
+    val selectedChartValue: StateFlow<Pair<String, String>?> = _selectedChartValue
 
     init {
-        fetchPAXGPriceDataPeriodically()
+        fetchPriceAndKlines()
     }
 
-    private fun fetchPAXGPriceDataPeriodically() {
+    fun fetchPriceAndKlines() {
         viewModelScope.launch {
-            while (true) {
-                fetchPAXGPriceData()
-                delay(60_000L) // Fetch every 60 seconds (1 minute)
-            }
-        }
-    }
-
-    private fun fetchPAXGPriceData() {
-        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
             try {
-                _errorMessage.value = null
-                val klines = apiService.getKlines(symbol = "PAXGUSDT", interval = "1m", limit = 100)
-                val newPriceData = klines.mapNotNull { kline ->
-                    if (kline.size >= 5) {
-                        val timestamp = (kline[0] as? Double)?.toLong() ?: (kline[0] as? Long) ?: return@mapNotNull null
-                        val closePrice = (kline[4] as? String)?.toDoubleOrNull() ?: return@mapNotNull null
-                        PriceData(timestamp, closePrice)
-                    } else {
-                        null
-                    }
+                // Fetch current price for PAXGUSDT
+                val priceResponse = apiService.getCurrentPrice("PAXGUSDT")
+                _currentPrice.value = priceResponse.price
+
+                // Fetch historical klines (e.g., last 24 hours, 1-hour interval)
+                val klinesResponse = apiService.getKlines("PAXGUSDT", "1h", 24)
+                val entries = klinesResponse.mapIndexed { index, kline ->
+                    val openTime = kline[0] as Long // Timestamp in milliseconds
+                    val closePrice = (kline[4] as String).toDouble() // Close price as String
+                    // Use index as x-value for MPAndroidChart, store timestamp in Entry.data for custom formatter
+                    Entry(index.toFloat(), closePrice.toFloat(), openTime)
                 }
-                _priceData.value = newPriceData
-                _currentPrice.value = newPriceData.lastOrNull()?.price
+                _historicalData.value = entries
 
+            } catch (e: HttpException) {
+                _error.value = "網路錯誤: ${e.code()} - ${e.message()}"
+                e.printStackTrace()
+            } catch (e: IOException) {
+                _error.value = "連線錯誤: 請檢查您的網路連線"
+                e.printStackTrace()
             } catch (e: Exception) {
-                _errorMessage.value = "Error fetching data: ${e.localizedMessage}"
-                _currentPrice.value = null
-                _priceData.value = emptyList()
+                _error.value = "發生未知錯誤: ${e.message}"
+                e.printStackTrace()
+            } finally {
+                _isLoading.value = false
             }
         }
     }
 
-    // ViewModel Factory to inject dependencies
-    class Factory(private val apiService: BinanceApiService) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            if (modelClass.isAssignableFrom(PAXGPriceViewModel::class.java)) {
-                return PAXGPriceViewModel(apiService) as T
-            }
-            throw IllegalArgumentException("Unknown ViewModel class")
+    fun setSelectedChartValue(timestamp: Long, price: Float) {
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+        val date = Date(timestamp)
+        _selectedChartValue.value = Pair(dateFormat.format(date), String.format("%.2f", price))
+    }
+
+    fun clearSelectedChartValue() {
+        _selectedChartValue.value = null
+    }
+}
+
+// ViewModel Factory for injecting BinanceApiService
+class MainViewModelFactory(private val apiService: BinanceApiService) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return MainViewModel(apiService) as T
         }
+        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
 
-// Custom ValueFormatter for X-axis (timestamps)
-class DateAxisValueFormatter : ValueFormatter() {
-    private val mFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-
-    override fun getAxisLabel(value: Float, axis: AxisBase?): String {
-        // value is the timestamp in milliseconds
-        return mFormat.format(Date(value.toLong()))
-    }
-}
-
-// MainActivity
+// --- MainActivity ---
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            AiAgentTheme {
+                // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colors.background
+                    color = MaterialTheme.colorScheme.background
                 ) {
-                    val viewModel: PAXGPriceViewModel = viewModel(
-                        factory = PAXGPriceViewModel.Factory(RetrofitClient.instance)
+                    val viewModel: MainViewModel = viewModel(
+                        factory = MainViewModelFactory(RetrofitClient.apiService)
                     )
-                    PAXGPriceTrackerScreen(viewModel)
+                    MainScreen(viewModel = viewModel)
                 }
             }
         }
     }
 }
 
+// --- Composable Functions ---
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PAXGPriceTrackerScreen(viewModel: PAXGPriceViewModel) {
+fun MainScreen(viewModel: MainViewModel) {
     val currentPrice by viewModel.currentPrice.collectAsState()
-    val priceData by viewModel.priceData.collectAsState()
-    val errorMessage by viewModel.errorMessage.collectAsState()
+    val historicalData by viewModel.historicalData.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val selectedChartValue by viewModel.selectedChartValue.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("PAXGUSDT Price Tracker") })
+            TopAppBar(
+                title = { Text("PAXGUSDT 金價追蹤") }
+            )
         }
     ) { paddingValues ->
         Column(
@@ -172,106 +203,225 @@ fun PAXGPriceTrackerScreen(viewModel: PAXGPriceViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Current PAXGUSDT Price:",
-                style = MaterialTheme.typography.h6
+                text = "當前 PAXGUSDT 價格:",
+                style = MaterialTheme.typography.headlineSmall
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = currentPrice?.let { String.format("%.2f USDT", it) } ?: "Loading...",
-                style = MaterialTheme.typography.h4,
-                color = MaterialTheme.colors.primary
+                text = "$currentPrice USDT",
+                style = MaterialTheme.typography.displayMedium,
+                color = MaterialTheme.colorScheme.primary
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            errorMessage?.let {
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                Text("載入中...", modifier = Modifier.padding(top = 8.dp))
+            } else if (error != null) {
                 Text(
-                    text = it,
-                    color = MaterialTheme.colors.error,
-                    style = MaterialTheme.typography.body2,
-                    modifier = Modifier.fillMaxWidth()
+                    text = "錯誤: $error",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+                Button(onClick = { viewModel.fetchPriceAndKlines() }) {
+                    Text("重試")
+                }
+            } else {
+                selectedChartValue?.let { (time, price) ->
+                    Text(
+                        text = "選定時間: $time",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "選定價格: $price USDT",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
-            if (priceData.isNotEmpty()) {
-                PriceLineChart(priceData = priceData, modifier = Modifier.fillMaxSize())
-            } else if (errorMessage == null) {
-                CircularProgressIndicator()
+                GoldPriceChart(
+                    entries = historicalData,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp),
+                    onValueSelected = { entry ->
+                        if (entry != null && entry.data is Long) {
+                            viewModel.setSelectedChartValue(entry.data as Long, entry.y)
+                        } else {
+                            viewModel.clearSelectedChartValue()
+                        }
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-fun PriceLineChart(priceData: List<PriceData>, modifier: Modifier = Modifier) {
+fun GoldPriceChart(
+    entries: List<Entry>,
+    modifier: Modifier = Modifier,
+    onValueSelected: (Entry?) -> Unit
+) {
     val context = LocalContext.current
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
+    val surfaceColor = MaterialTheme.colorScheme.surface // Not directly used for chart background, but good to have
 
     AndroidView(
         modifier = modifier,
-        factory = {
-            LineChart(context).apply {
-                description.isEnabled = false
-                setTouchEnabled(true)
-                isDragEnabled = true
-                setScaleEnabled(true)
-                setPinchZoom(true) // Enable pinch zoom to scale both axes
+        factory = { ctx ->
+            LineChart(ctx).apply {
+                description.isEnabled = false // Disable chart description
+                setTouchEnabled(true) // Enable touch gestures
+                isDragEnabled = true // Enable dragging
+                setScaleEnabled(true) // Enable scaling
+                setPinchZoom(true) // Enable pinch zoom
 
                 // X-axis configuration
                 xAxis.apply {
                     position = XAxis.XAxisPosition.BOTTOM
-                    setDrawGridLines(false)
+                    setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
                     setDrawAxisLine(true)
-                    valueFormatter = DateAxisValueFormatter()
-                    textColor = Color.BLACK
-                    granularity = 300000f // 5 minutes in milliseconds for better readability
+                    textColor = onSurfaceColor.toArgb()
+                    valueFormatter = object : ValueFormatter() {
+                        private val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+                        override fun getFormattedValue(value: Float): String {
+                            // 'value' here is the index (0, 1, 2...), we stored timestamp in Entry.data
+                            // Find the corresponding entry to get the timestamp
+                            val entry = entries.getOrNull(value.toInt())
+                            return entry?.let {
+                                dateFormat.format(Date(it.data as Long))
+                            } ?: ""
+                        }
+                    }
+                    labelRotationAngle = -45f // Rotate labels for better readability
+                    setLabelCount(4, true) // Show approximately 4 labels, force exactly
                 }
 
                 // Left Y-axis configuration
                 axisLeft.apply {
                     setDrawGridLines(true)
+                    gridColor = onSurfaceColor.copy(alpha = 0.2f).toArgb()
+                    textColor = onSurfaceColor.toArgb()
                     setDrawAxisLine(true)
-                    textColor = Color.BLACK
                 }
 
-                // Right Y-axis configuration (disabled)
+                // Right Y-axis configuration (disable it)
                 axisRight.isEnabled = false
 
                 // Legend configuration
                 legend.apply {
                     isEnabled = true
-                    textColor = Color.BLACK
+                    textColor = onSurfaceColor.toArgb()
+                    form = com.github.mikephil.charting.components.Legend.LegendForm.CIRCLE
+                    horizontalAlignment = com.github.mikephil.charting.components.Legend.LegendHorizontalAlignment.LEFT
+                    verticalAlignment = com.github.mikephil.charting.components.Legend.LegendVerticalAlignment.TOP
+                    orientation = com.github.mikephil.charting.components.Legend.LegendOrientation.HORIZONTAL
+                    setDrawInside(false)
                 }
 
-                // Animation
-                animateX(1000)
+                // Add a listener for value selection
+                setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
+                    override fun onValueSelected(e: Entry?, h: Highlight?) {
+                        onValueSelected(e)
+                    }
+
+                    override fun onNothingSelected() {
+                        onValueSelected(null)
+                    }
+                })
             }
         },
         update = { chart ->
-            if (priceData.isNotEmpty()) {
-                val entries = priceData.map { data ->
-                    Entry(data.timestamp.toFloat(), data.price.toFloat())
-                }
-
+            if (entries.isNotEmpty()) {
                 val dataSet = LineDataSet(entries, "PAXGUSDT Price").apply {
-                    color = Color.BLUE
-                    setCircleColor(Color.BLUE)
+                    color = primaryColor.toArgb()
+                    valueTextColor = onSurfaceColor.toArgb()
+                    setDrawCircles(false) // Don't draw individual circles for each point
+                    setDrawValues(false) // Don't draw individual values on the chart
                     lineWidth = 2f
-                    circleRadius = 3f
-                    setDrawCircleHole(false)
-                    valueTextSize = 0f // Hide value text on chart
-                    mode = LineDataSet.Mode.LINEAR // Smooth line
-                    setDrawFilled(true) // Fill area below the line
-                    fillColor = Color.BLUE
-                    fillAlpha = 50
+                    mode = LineDataSet.Mode.CUBIC_BEZIER // Smooth curve
+                    setDrawFilled(true) // Fill the area below the line
+                    fillColor = primaryColor.copy(alpha = 0.3f).toArgb()
+                    fillAlpha = 100
                 }
-
                 val lineData = LineData(dataSet)
                 chart.data = lineData
                 chart.invalidate() // Refresh the chart
             } else {
-                chart.clear() // Clear chart if no data
+                chart.clear()
+                chart.setNoDataText("無資料可顯示")
+                chart.setNoDataTextColor(onSurfaceColor.toArgb())
                 chart.invalidate()
             }
         }
     )
+}
+
+// Extension function to convert Compose Color to Android Color Int
+fun Color.toArgb(): Int {
+    return android.graphics.Color.argb(
+        (alpha * 255).toInt(),
+        (red * 255).toInt(),
+        (green * 255).toInt(),
+        (blue * 255).toInt()
+    )
+}
+
+// --- Theme (Placeholder for ui.theme.Theme.kt and ui.theme.Type.kt) ---
+// In a real project, these would be in separate files within the ui.theme package.
+@Composable
+fun AiAgentTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(), // Use system dark theme preference
+    content: @Composable () -> Unit
+) {
+    val colors = if (darkTheme) {
+        darkColorScheme(
+            primary = Color(0xFFBB86FC),
+            secondary = Color(0xFF03DAC5),
+            tertiary = Color(0xFF3700B3),
+            background = Color(0xFF121212),
+            surface = Color(0xFF121212),
+            onPrimary = Color.Black,
+            onSecondary = Color.Black,
+            onTertiary = Color.White,
+            onBackground = Color.White,
+            onSurface = Color.White,
+            error = Color(0xFFCF6679)
+        )
+    } else {
+        lightColorScheme(
+            primary = Color(0xFF6200EE),
+            secondary = Color(0xFF03DAC5),
+            tertiary = Color(0xFF3700B3),
+            background = Color(0xFFFFFFFF),
+            surface = Color(0xFFFFFFFF),
+            onPrimary = Color.White,
+            onSecondary = Color.Black,
+            onTertiary = Color.White,
+            onBackground = Color.Black,
+            onSurface = Color.Black,
+            error = Color(0xFFB00020)
+        )
+    }
+
+    MaterialTheme(
+        colorScheme = colors,
+        typography = Typography(), // Assuming default or custom Typography
+        content = content
+    )
+}
+
+// Placeholder for Typography, usually defined in ui.theme.Type.kt
+@Composable
+fun Typography() = androidx.compose.material3.Typography()
+
+// Placeholder for isSystemInDarkTheme, usually from androidx.compose.foundation.isSystemInDarkTheme
+@Composable
+fun isSystemInDarkTheme(): Boolean {
+    // This is a simplified placeholder. In a real app, you'd use:
+    // return androidx.compose.foundation.isSystemInDarkTheme()
+    // For now, we'll just return false to always use light theme unless explicitly set.
+    return false
 }

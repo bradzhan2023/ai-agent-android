@@ -1,14 +1,15 @@
 package com.example.aiagent
 
+import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.* // Using Material 3 components
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -37,39 +38,85 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 
-// --- Data Models ---
-data class BinancePriceResponse(
+// Data Models
+data class BinanceTicker(
     val symbol: String,
     val price: String
 )
 
-// Binance klines API returns a list of lists.
-// We only care about Open time (index 0) and Close price (index 4) for a simple line chart.
-// The timestamp is in milliseconds.
-// The close price is a String, needs to be converted to Double.
+// Binance Klines API returns a list of arrays:
+// [
+//   [
+//     1499040000000,      // Open time
+//     "0.01634790",       // Open
+//     "0.80000000",       // High
+//     "0.01575800",       // Low
+//     "0.01577100",       // Close
+//     "148976.10704000",  // Volume
+//     1499644799999,      // Close time
+//     "2434.19055334",    // Quote asset volume
+//     308,                // Number of trades
+//     "1756.87402397",    // Taker buy base asset volume
+//     "28.46694368",      // Taker buy quote asset volume
+//     "0"                 // Ignore
+//   ]
+// ]
+data class KLineData(
+    val openTime: Long,
+    val open: String,
+    val high: String,
+    val low: String,
+    val close: String,
+    val volume: String,
+    val closeTime: Long,
+    val quoteAssetVolume: String,
+    val numberOfTrades: Int,
+    val takerBuyBaseAssetVolume: String,
+    val takerBuyQuoteAssetVolume: String,
+    val ignore: String
+) {
+    companion object {
+        fun fromJsonArray(jsonArray: List<Any>): KLineData {
+            return KLineData(
+                openTime = (jsonArray[0] as Double).toLong(),
+                open = jsonArray[1] as String,
+                high = jsonArray[2] as String,
+                low = jsonArray[3] as String,
+                close = jsonArray[4] as String,
+                volume = jsonArray[5] as String,
+                closeTime = (jsonArray[6] as Double).toLong(),
+                quoteAssetVolume = jsonArray[7] as String,
+                numberOfTrades = (jsonArray[8] as Double).toInt(),
+                takerBuyBaseAssetVolume = jsonArray[9] as String,
+                takerBuyQuoteAssetVolume = jsonArray[10] as String,
+                ignore = jsonArray[11] as String
+            )
+        }
+    }
+}
 
-// --- Retrofit Interface ---
+// Retrofit API Interface
 interface BinanceApiService {
     @GET("api/v3/ticker/price")
-    suspend fun getCurrentPrice(@Query("symbol") symbol: String): BinancePriceResponse
+    suspend fun getTickerPrice(@Query("symbol") symbol: String): BinanceTicker
 
     @GET("api/v3/klines")
     suspend fun getKlines(
         @Query("symbol") symbol: String,
-        @Query("interval") interval: String, // e.g., "1h", "4h", "1d"
-        @Query("limit") limit: Int // Number of data points
-    ): List<List<Any>> // Raw response for klines
+        @Query("interval") interval: String,
+        @Query("limit") limit: Int
+    ): List<List<Any>> // Raw list of arrays
 }
 
-// --- Retrofit Client ---
+// Retrofit Client
 object RetrofitClient {
     private const val BASE_URL = "https://api.binance.com/"
 
-    val apiService: BinanceApiService by lazy {
-        val gson = GsonBuilder()
-            .setLenient() // Be lenient with JSON parsing
-            .create()
+    private val gson = GsonBuilder()
+        .setLenient()
+        .create()
 
+    val instance: BinanceApiService by lazy {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
             .addConverterFactory(GsonConverterFactory.create(gson))
@@ -78,350 +125,275 @@ object RetrofitClient {
     }
 }
 
-// --- ViewModel ---
-class MainViewModel(private val apiService: BinanceApiService) : ViewModel() {
+// ViewModel
+class GoldPriceViewModel(private val apiService: BinanceApiService) : ViewModel() {
 
-    private val _currentPrice = MutableStateFlow<String>("N/A")
+    private val _currentPrice = MutableStateFlow<String>("Loading...")
     val currentPrice: StateFlow<String> = _currentPrice
 
-    private val _historicalData = MutableStateFlow<List<Entry>>(emptyList())
-    val historicalData: StateFlow<List<Entry>> = _historicalData
+    private val _historicalPrices = MutableStateFlow<List<KLineData>>(emptyList())
+    val historicalPrices: StateFlow<List<KLineData>> = _historicalPrices
 
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error
-
-    private val _selectedChartValue = MutableStateFlow<Pair<String, String>?>(null)
-    val selectedChartValue: StateFlow<Pair<String, String>?> = _selectedChartValue
+    private val SYMBOL = "PAXGUSDT"
+    private val INTERVAL = "1h" // 1-hour interval for historical data
+    private val LIMIT = 100 // Last 100 data points
 
     init {
-        fetchPriceAndKlines()
+        fetchGoldPrice()
+        fetchHistoricalGoldPrices()
     }
 
-    fun fetchPriceAndKlines() {
+    fun fetchGoldPrice() {
         viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
             try {
-                // Fetch current price for PAXGUSDT
-                val priceResponse = apiService.getCurrentPrice("PAXGUSDT")
-                _currentPrice.value = priceResponse.price
-
-                // Fetch historical klines (e.g., last 24 hours, 1-hour interval)
-                val klinesResponse = apiService.getKlines("PAXGUSDT", "1h", 24)
-                val entries = klinesResponse.mapIndexed { index, kline ->
-                    val openTime = kline[0] as Long // Timestamp in milliseconds
-                    val closePrice = (kline[4] as String).toDouble() // Close price as String
-                    // Use index as x-value for MPAndroidChart, store timestamp in Entry.data for custom formatter
-                    Entry(index.toFloat(), closePrice.toFloat(), openTime)
-                }
-                _historicalData.value = entries
-
+                _errorMessage.value = null
+                val ticker = apiService.getTickerPrice(SYMBOL)
+                _currentPrice.value = String.format(Locale.US, "%.2f", ticker.price.toDouble())
             } catch (e: HttpException) {
-                _error.value = "網路錯誤: ${e.code()} - ${e.message()}"
-                e.printStackTrace()
+                _errorMessage.value = "HTTP Error: ${e.code()} - ${e.message()}"
+                Log.e("GoldPriceViewModel", "HTTP Error: ${e.code()} - ${e.message()}", e)
             } catch (e: IOException) {
-                _error.value = "連線錯誤: 請檢查您的網路連線"
-                e.printStackTrace()
+                _errorMessage.value = "Network Error: ${e.message}"
+                Log.e("GoldPriceViewModel", "Network Error: ${e.message}", e)
             } catch (e: Exception) {
-                _error.value = "發生未知錯誤: ${e.message}"
-                e.printStackTrace()
-            } finally {
-                _isLoading.value = false
+                _errorMessage.value = "An unexpected error occurred: ${e.message}"
+                Log.e("GoldPriceViewModel", "Unexpected Error: ${e.message}", e)
             }
         }
     }
 
-    fun setSelectedChartValue(timestamp: Long, price: Float) {
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        val date = Date(timestamp)
-        _selectedChartValue.value = Pair(dateFormat.format(date), String.format("%.2f", price))
-    }
-
-    fun clearSelectedChartValue() {
-        _selectedChartValue.value = null
+    fun fetchHistoricalGoldPrices() {
+        viewModelScope.launch {
+            try {
+                _errorMessage.value = null
+                val klinesRaw = apiService.getKlines(SYMBOL, INTERVAL, LIMIT)
+                val klines = klinesRaw.map { KLineData.fromJsonArray(it) }
+                _historicalPrices.value = klines
+            } catch (e: HttpException) {
+                _errorMessage.value = "HTTP Error fetching historical data: ${e.code()} - ${e.message()}"
+                Log.e("GoldPriceViewModel", "HTTP Error fetching historical data: ${e.code()} - ${e.message()}", e)
+            } catch (e: IOException) {
+                _errorMessage.value = "Network Error fetching historical data: ${e.message}"
+                Log.e("GoldPriceViewModel", "Network Error fetching historical data: ${e.message}", e)
+            } catch (e: Exception) {
+                _errorMessage.value = "An unexpected error occurred fetching historical data: ${e.message}"
+                Log.e("GoldPriceViewModel", "Unexpected Error fetching historical data: ${e.message}", e)
+            }
+        }
     }
 }
 
-// ViewModel Factory for injecting BinanceApiService
-class MainViewModelFactory(private val apiService: BinanceApiService) : ViewModelProvider.Factory {
+// ViewModel Factory
+class GoldPriceViewModelFactory(private val apiService: BinanceApiService) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
+        if (modelClass.isAssignableFrom(GoldPriceViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(apiService) as T
+            return GoldPriceViewModel(apiService) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
 
-// --- MainActivity ---
+// MainActivity
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            AiAgentTheme {
-                // A surface container using the 'background' color from the theme
+            MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val viewModel: MainViewModel = viewModel(
-                        factory = MainViewModelFactory(RetrofitClient.apiService)
+                    val viewModel: GoldPriceViewModel = viewModel(
+                        factory = GoldPriceViewModelFactory(RetrofitClient.instance)
                     )
-                    MainScreen(viewModel = viewModel)
+                    GoldPriceScreen(viewModel = viewModel)
                 }
             }
         }
     }
 }
 
-// --- Composable Functions ---
-
-@OptIn(ExperimentalMaterial3Api::class)
+// Composables
 @Composable
-fun MainScreen(viewModel: MainViewModel) {
+fun GoldPriceScreen(viewModel: GoldPriceViewModel) {
     val currentPrice by viewModel.currentPrice.collectAsState()
-    val historicalData by viewModel.historicalData.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
-    val selectedChartValue by viewModel.selectedChartValue.collectAsState()
+    val historicalPrices by viewModel.historicalPrices.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("PAXGUSDT 金價追蹤") }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "PAXGUSDT 金價追蹤",
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        PriceDisplay(price = currentPrice)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (errorMessage != null) {
+            Text(
+                text = "錯誤: $errorMessage",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
         }
-    ) { paddingValues ->
+
+        if (historicalPrices.isNotEmpty()) {
+            GoldPriceChart(historicalPrices = historicalPrices)
+        } else if (errorMessage == null) {
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(onClick = {
+            viewModel.fetchGoldPrice()
+            viewModel.fetchHistoricalGoldPrices()
+        }) {
+            Text("重新整理")
+        }
+    }
+}
+
+@Composable
+fun PriceDisplay(price: String) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp),
+                .padding(16.dp)
+                .fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "當前 PAXGUSDT 價格:",
-                style = MaterialTheme.typography.headlineSmall
+                text = "當前 PAXGUSDT 價格",
+                style = MaterialTheme.typography.titleMedium
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "$currentPrice USDT",
-                style = MaterialTheme.typography.displayMedium,
+                text = "$$price",
+                style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.primary
             )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.size(48.dp))
-                Text("載入中...", modifier = Modifier.padding(top = 8.dp))
-            } else if (error != null) {
-                Text(
-                    text = "錯誤: $error",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Button(onClick = { viewModel.fetchPriceAndKlines() }) {
-                    Text("重試")
-                }
-            } else {
-                selectedChartValue?.let { (time, price) ->
-                    Text(
-                        text = "選定時間: $time",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        text = "選定價格: $price USDT",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                GoldPriceChart(
-                    entries = historicalData,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(300.dp),
-                    onValueSelected = { entry ->
-                        if (entry != null && entry.data is Long) {
-                            viewModel.setSelectedChartValue(entry.data as Long, entry.y)
-                        } else {
-                            viewModel.clearSelectedChartValue()
-                        }
-                    }
-                )
-            }
         }
     }
 }
 
 @Composable
-fun GoldPriceChart(
-    entries: List<Entry>,
-    modifier: Modifier = Modifier,
-    onValueSelected: (Entry?) -> Unit
-) {
+fun GoldPriceChart(historicalPrices: List<KLineData>) {
     val context = LocalContext.current
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val onSurfaceColor = MaterialTheme.colorScheme.onSurface
-    val surfaceColor = MaterialTheme.colorScheme.surface // Not directly used for chart background, but good to have
+    val selectedValue = remember { mutableStateOf<String?>(null) }
 
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            LineChart(ctx).apply {
-                description.isEnabled = false // Disable chart description
-                setTouchEnabled(true) // Enable touch gestures
-                isDragEnabled = true // Enable dragging
-                setScaleEnabled(true) // Enable scaling
-                setPinchZoom(true) // Enable pinch zoom
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "PAXGUSDT 歷史價格 (最近 ${historicalPrices.size} 小時)",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
 
-                // X-axis configuration
-                xAxis.apply {
-                    position = XAxis.XAxisPosition.BOTTOM
-                    setDrawGridLines(false) // MPAndroidChart 3.1.0 syntax
-                    setDrawAxisLine(true)
-                    textColor = onSurfaceColor.toArgb()
-                    valueFormatter = object : ValueFormatter() {
-                        private val dateFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+        AndroidView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(300.dp),
+            factory = { ctx ->
+                LineChart(ctx).apply {
+                    description.isEnabled = false
+                    setTouchEnabled(true)
+                    isDragEnabled = true
+                    setScaleEnabled(true)
+                    setPinchZoom(true)
+                    setDrawGridBackground(false)
+                    setBackgroundColor(Color.WHITE)
+
+                    // X-axis configuration
+                    xAxis.position = XAxis.XAxisPosition.BOTTOM
+                    xAxis.setDrawGridLines(false)
+                    xAxis.setDrawAxisLine(true)
+                    xAxis.textColor = Color.BLACK
+                    xAxis.valueFormatter = object : ValueFormatter() {
+                        private val mFormat = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
                         override fun getFormattedValue(value: Float): String {
-                            // 'value' here is the index (0, 1, 2...), we stored timestamp in Entry.data
-                            // Find the corresponding entry to get the timestamp
-                            val entry = entries.getOrNull(value.toInt())
-                            return entry?.let {
-                                dateFormat.format(Date(it.data as Long))
-                            } ?: ""
+                            return mFormat.format(Date(value.toLong()))
                         }
                     }
-                    labelRotationAngle = -45f // Rotate labels for better readability
-                    setLabelCount(4, true) // Show approximately 4 labels, force exactly
+                    xAxis.labelRotationAngle = -45f // Rotate labels for better readability
+                    xAxis.setLabelCount(5, true) // Show approximately 5 labels
+
+                    // Left Y-axis configuration
+                    axisLeft.setDrawGridLines(true)
+                    axisLeft.setDrawAxisLine(true)
+                    axisLeft.textColor = Color.BLACK
+                    axisLeft.gridColor = Color.LTGRAY
+                    axisLeft.axisMinimum = 0f // Start from 0
+
+                    // Right Y-axis configuration (disable)
+                    axisRight.isEnabled = false
+
+                    legend.isEnabled = true
+                    legend.textColor = Color.BLACK
+
+                    // Set up value selection listener
+                    setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
+                        override fun onValueSelected(e: Entry?, h: Highlight?) {
+                            if (e != null) {
+                                val date = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(e.x.toLong()))
+                                selectedValue.value = "時間: $date, 價格: ${String.format(Locale.US, "%.2f", e.y)}"
+                            }
+                        }
+
+                        override fun onNothingSelected() {
+                            selectedValue.value = null
+                        }
+                    })
+                }
+            },
+            update = { chart ->
+                val entries = historicalPrices.mapIndexed { _, kline ->
+                    Entry(kline.openTime.toFloat(), kline.close.toFloat())
                 }
 
-                // Left Y-axis configuration
-                axisLeft.apply {
-                    setDrawGridLines(true)
-                    gridColor = onSurfaceColor.copy(alpha = 0.2f).toArgb()
-                    textColor = onSurfaceColor.toArgb()
-                    setDrawAxisLine(true)
-                }
-
-                // Right Y-axis configuration (disable it)
-                axisRight.isEnabled = false
-
-                // Legend configuration
-                legend.apply {
-                    isEnabled = true
-                    textColor = onSurfaceColor.toArgb()
-                    form = com.github.mikephil.charting.components.Legend.LegendForm.CIRCLE
-                    horizontalAlignment = com.github.mikephil.charting.components.Legend.LegendHorizontalAlignment.LEFT
-                    verticalAlignment = com.github.mikephil.charting.components.Legend.LegendVerticalAlignment.TOP
-                    orientation = com.github.mikephil.charting.components.Legend.LegendOrientation.HORIZONTAL
-                    setDrawInside(false)
-                }
-
-                // Add a listener for value selection
-                setOnChartValueSelectedListener(object : OnChartValueSelectedListener {
-                    override fun onValueSelected(e: Entry?, h: Highlight?) {
-                        onValueSelected(e)
+                if (entries.isNotEmpty()) {
+                    val dataSet = LineDataSet(entries, "PAXGUSDT 價格").apply {
+                        color = Color.BLUE
+                        setCircleColor(Color.BLUE)
+                        lineWidth = 2f
+                        circleRadius = 3f
+                        setDrawCircleHole(false)
+                        valueTextSize = 0f // Hide value text on chart
+                        mode = LineDataSet.Mode.LINEAR // Smooth line
+                        setDrawFilled(true) // Fill area below the line
+                        fillColor = Color.BLUE
+                        fillAlpha = 50
                     }
 
-                    override fun onNothingSelected() {
-                        onValueSelected(null)
-                    }
-                })
-            }
-        },
-        update = { chart ->
-            if (entries.isNotEmpty()) {
-                val dataSet = LineDataSet(entries, "PAXGUSDT Price").apply {
-                    color = primaryColor.toArgb()
-                    valueTextColor = onSurfaceColor.toArgb()
-                    setDrawCircles(false) // Don't draw individual circles for each point
-                    setDrawValues(false) // Don't draw individual values on the chart
-                    lineWidth = 2f
-                    mode = LineDataSet.Mode.CUBIC_BEZIER // Smooth curve
-                    setDrawFilled(true) // Fill the area below the line
-                    fillColor = primaryColor.copy(alpha = 0.3f).toArgb()
-                    fillAlpha = 100
+                    val lineData = LineData(dataSet)
+                    chart.data = lineData
+                    chart.invalidate() // Refresh chart
+                    chart.animateX(1000) // Animate chart
                 }
-                val lineData = LineData(dataSet)
-                chart.data = lineData
-                chart.invalidate() // Refresh the chart
-            } else {
-                chart.clear()
-                chart.setNoDataText("無資料可顯示")
-                chart.setNoDataTextColor(onSurfaceColor.toArgb())
-                chart.invalidate()
             }
+        )
+
+        selectedValue.value?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
-    )
-}
-
-// Extension function to convert Compose Color to Android Color Int
-fun Color.toArgb(): Int {
-    return android.graphics.Color.argb(
-        (alpha * 255).toInt(),
-        (red * 255).toInt(),
-        (green * 255).toInt(),
-        (blue * 255).toInt()
-    )
-}
-
-// --- Theme (Placeholder for ui.theme.Theme.kt and ui.theme.Type.kt) ---
-// In a real project, these would be in separate files within the ui.theme package.
-@Composable
-fun AiAgentTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(), // Use system dark theme preference
-    content: @Composable () -> Unit
-) {
-    val colors = if (darkTheme) {
-        darkColorScheme(
-            primary = Color(0xFFBB86FC),
-            secondary = Color(0xFF03DAC5),
-            tertiary = Color(0xFF3700B3),
-            background = Color(0xFF121212),
-            surface = Color(0xFF121212),
-            onPrimary = Color.Black,
-            onSecondary = Color.Black,
-            onTertiary = Color.White,
-            onBackground = Color.White,
-            onSurface = Color.White,
-            error = Color(0xFFCF6679)
-        )
-    } else {
-        lightColorScheme(
-            primary = Color(0xFF6200EE),
-            secondary = Color(0xFF03DAC5),
-            tertiary = Color(0xFF3700B3),
-            background = Color(0xFFFFFFFF),
-            surface = Color(0xFFFFFFFF),
-            onPrimary = Color.White,
-            onSecondary = Color.Black,
-            onTertiary = Color.White,
-            onBackground = Color.Black,
-            onSurface = Color.Black,
-            error = Color(0xFFB00020)
-        )
     }
-
-    MaterialTheme(
-        colorScheme = colors,
-        typography = Typography(), // Assuming default or custom Typography
-        content = content
-    )
-}
-
-// Placeholder for Typography, usually defined in ui.theme.Type.kt
-@Composable
-fun Typography() = androidx.compose.material3.Typography()
-
-// Placeholder for isSystemInDarkTheme, usually from androidx.compose.foundation.isSystemInDarkTheme
-@Composable
-fun isSystemInDarkTheme(): Boolean {
-    // This is a simplified placeholder. In a real app, you'd use:
-    // return androidx.compose.foundation.isSystemInDarkTheme()
-    // For now, we'll just return false to always use light theme unless explicitly set.
-    return false
 }
